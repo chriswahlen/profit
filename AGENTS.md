@@ -8,6 +8,7 @@ These guidelines define how changes should be made in this repository to keep th
 - Optimize for reproducibility: deterministic outputs given the same inputs and config.
 - Avoid hidden state: no implicit globals, no “magic” side effects on import.
 - Fail loudly on invalid inputs; validate at boundaries.
+- Model data to be **provider-neutral, globally identifiable, and time-correct**. Concretely: use internal IDs with mapping tables, prefer international standards for identifiers (ISO currencies/countries, MIC exchanges, ISIN/FIGI, etc.), and normalize time to UTC while retaining exchange/session calendar metadata.
 
 ## Python standards
 - Target Python 3.11+ unless the repo specifies otherwise.
@@ -43,4 +44,3 @@ These guidelines define how changes should be made in this repository to keep th
 ## When unsure
 - Ask for clarification on requirements (data source, schema expectations, performance constraints).
 - Default to the simplest solution that preserves future extensibility.
-
