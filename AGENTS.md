@@ -40,6 +40,7 @@ These guidelines define how changes should be made in this repository to keep th
 - Keep public APIs documented with docstrings (especially inputs/outputs and units).
 - Update README when adding a new subsystem, config knob, or workflow.
 - Prefer adding or updating a small example script when introducing a new feature that’s hard to test via unit tests alone.
+- Keep `docs/schema.md` in sync with any schema or data-model changes; treat it as canonical documentation for the global data plane.
 
 ## When unsure
 - Ask for clarification on requirements (data source, schema expectations, performance constraints).
