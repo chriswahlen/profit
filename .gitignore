@@ -1,3 +1,9 @@
 .git
 __pycache__
 *.pyc
+*.sqlite3
+.cache
+data/
+fake_web
+*.egg-info
+venv/*
