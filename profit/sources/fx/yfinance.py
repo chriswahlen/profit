@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from profit.sources.fx.base import FxDailyFetcher, FxRatePoint, FxRequest
+from profit.sources.errors import ThrottledError
 
 
 def _to_utc(ts: datetime) -> datetime:
@@ -53,14 +54,27 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
         start_utc = _to_utc(start).date()
         end_exclusive = _to_utc(end).date() + timedelta(days=1)
 
-        df = yf.download(
-            request.provider_code,
-            start=start_utc,
-            end=end_exclusive,
-            auto_adjust=False,
-            actions=False,
-            progress=False,
-        )
+        try:
+            df = yf.download(
+                request.provider_code,
+                start=start_utc,
+                end=end_exclusive,
+                auto_adjust=False,
+                actions=False,
+                progress=False,
+            )
+        except Exception as exc:
+            retry_after = None
+            status = getattr(exc, "response", None)
+            code = getattr(status, "status_code", None)
+            if code == 429:
+                ra = getattr(status, "headers", {}).get("Retry-After") if status else None
+                try:
+                    retry_after = float(ra)
+                except Exception:
+                    retry_after = None
+                raise ThrottledError("yfinance HTTP 429", retry_after=retry_after) from exc
+            raise
         if df is None or getattr(df, "empty", False):
             return []
 

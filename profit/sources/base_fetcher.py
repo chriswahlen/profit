@@ -8,6 +8,7 @@ from typing import Callable, Generic, Iterable, List, Optional, Sequence, Tuple,
 
 from profit.cache import CacheMissError, FileCache, OfflineModeError
 from profit.sources.coverage import CoverageAdapter
+from profit.sources.errors import ThrottledError
 from profit.sources.types import Fingerprintable
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
@@ -35,6 +36,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         max_attempts: int = 3,
         backoff_factor: float = 0.5,
         max_backoff: float = 5.0,
+        retry_after_cap: float = 60.0,
         retry_exceptions: Tuple[Type[BaseException], ...] = (Exception,),
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -45,6 +47,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         self.max_attempts = max_attempts
         self.backoff_factor = backoff_factor
         self.max_backoff = max_backoff
+        self.retry_after_cap = retry_after_cap
         self.retry_exceptions = retry_exceptions
         self._sleep = sleep_fn
 
@@ -202,6 +205,16 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
             attempt += 1
             try:
                 return fn()
+            except ThrottledError as exc:
+                if attempt >= self.max_attempts:
+                    raise
+                retry_after = exc.retry_after
+                computed = self.backoff_factor * 2 ** (attempt - 1)
+                sleep_for = min(
+                    self.retry_after_cap,
+                    retry_after if retry_after is not None else computed,
+                )
+                self._sleep(min(self.max_backoff, sleep_for))
             except self.retry_exceptions as exc:  # type: ignore[misc]
                 if attempt >= self.max_attempts:
                     raise
