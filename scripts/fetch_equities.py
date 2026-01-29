@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+import logging
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -58,6 +59,11 @@ def _build_parser() -> ArgumentParser:
         default=["close_raw"],
         help="Field names to read back after ingestion (default: close_raw)",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING...). Default: INFO",
+    )
     return parser
 
 
@@ -99,6 +105,11 @@ def main() -> None:
 
     parser = _build_parser()
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
 
     start = _parse_date(args.start)
     end = _parse_date(args.end)
