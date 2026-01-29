@@ -100,11 +100,11 @@ def _print_points(
         print(f"  {ts.date().isoformat()} {value:.6f}")
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     ensure_profit_conf_loaded()
 
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -145,17 +145,27 @@ def main() -> None:
         field="close_raw",
         step_us=DAY_US,
     )
-
-    if close_series is not None and store.is_range_complete(close_series, start=start, end=end):
-        print("Range already complete in columnar store; skipping fetch.")
-        for field in args.read_fields:
-            _print_points(store, dataset, request.instrument_id, field, start, end)
-        return
+    missing_ranges: list[tuple[datetime, datetime]] = []
+    if close_series is not None:
+        missing_ranges = store.get_unfetched_ranges(close_series, start=start, end=end)
+        if not missing_ranges:
+            print("Range already complete in columnar store; skipping fetch.")
+            for field in args.read_fields:
+                _print_points(store, dataset, request.instrument_id, field, start, end)
+            return
 
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
     fetcher = YFinanceDailyBarsFetcher(cache=cache, max_window_days=30)
-    print(f"Fetching {args.ticker} bars {start.date()} → {end.date()} via yfinance...")
-    bars = fetcher.timeseries_fetch(request, start, end)
+
+    bars = []
+    if missing_ranges:
+        print(f"Missing {len(missing_ranges)} sub-range(s); fetching only gaps via yfinance...")
+        for gap_start, gap_end in missing_ranges:
+            print(f"  gap: {gap_start.date()} → {gap_end.date()}")
+            bars.extend(fetcher.timeseries_fetch(request, gap_start, gap_end))
+    else:
+        print(f"Fetching {args.ticker} bars {start.date()} → {end.date()} via yfinance...")
+        bars = fetcher.timeseries_fetch(request, start, end)
 
     if not bars:
         print("Provider returned no bars.")

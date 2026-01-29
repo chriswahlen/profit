@@ -962,6 +962,227 @@ def test_partial_slices_and_unrelated_slices(tmp_path):
     assert far is False
 
 
+def test_get_unfetched_ranges(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    # Write a few points; leave gaps.
+    store.write(sid, [(_dt(1970, 1, 2), 1.0), (_dt(1970, 1, 4), 2.0)])
+    missing = store.get_unfetched_ranges(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 6))
+    # Expect gaps: [day1], [day3], [day5-6]
+    assert [(a.date(), b.date()) for a, b in missing] == [
+        (_dt(1970, 1, 1).date(), _dt(1970, 1, 1).date()),
+        (_dt(1970, 1, 3).date(), _dt(1970, 1, 3).date()),
+        (_dt(1970, 1, 5).date(), _dt(1970, 1, 6).date()),
+    ]
+
+
+def test_mark_fetched_preserves_written_values(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 4)
+    store.write(sid, [(_dt(1970, 1, 2), 42.0)])
+    store.mark_range_fetched(sid, start=start, end=end)
+
+    pts = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert pts == [(_dt(1970, 1, 2), 42.0)]
+
+
+def test_get_unfetched_ranges_idempotent_after_mark(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 3)
+    gaps = store.get_unfetched_ranges(sid, start=start, end=end)
+    assert gaps
+    for g0, g1 in gaps:
+        store.mark_range_fetched(sid, start=g0, end=g1)
+    assert store.get_unfetched_ranges(sid, start=start, end=end) == []
+
+
+def test_get_unfetched_ranges_on_empty_series(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=3,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 9)  # spans three slices
+    gaps = store.get_unfetched_ranges(sid, start=start, end=end)
+    assert gaps == [(start, end)]
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+
+def test_mark_partial_window_on_empty_series(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    full_start = _dt(1970, 1, 1)
+    full_end = _dt(1970, 1, 8)
+    # Mark only a sub-window as fetched.
+    partial_start = _dt(1970, 1, 3)
+    partial_end = _dt(1970, 1, 5)
+    store.mark_range_fetched(sid, start=partial_start, end=partial_end)
+
+    gaps = store.get_unfetched_ranges(sid, start=full_start, end=full_end)
+    # Expect two gaps: before partial and after partial.
+    assert [(a.date(), b.date()) for a, b in gaps] == [
+        (_dt(1970, 1, 1).date(), _dt(1970, 1, 2).date()),
+        (_dt(1970, 1, 6).date(), _dt(1970, 1, 8).date()),
+    ]
+    assert store.is_range_complete(sid, start=full_start, end=full_end) is False
+
+
+def test_write_after_mark_fetched_keeps_complete(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 4)
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+    store.write(sid, [(_dt(1970, 1, 2), 5.0)])
+    assert store.is_range_complete(sid, start=start, end=end) is True
+    pts = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert pts == [(_dt(1970, 1, 2), 5.0)]
+
+
+def test_offsets_enabled_empty_series(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="EURUSD",
+        dataset="fx_rate",
+        field="rate",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=3,
+        sentinel_f64=float("nan"),
+        offsets_enabled=True,
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 3)
+    assert store.is_range_complete(sid, start=start, end=end) is False
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+    pts = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert pts == []
+
+
+def test_non_daily_step_empty_series(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    hour_us = 3_600_000_000
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=hour_us,
+        grid_origin_ts_us=0,
+        window_points=6,  # 6-hour slices
+        sentinel_f64=float("nan"),
+    )
+    start = datetime(1970, 1, 1, 0, 0, tzinfo=timezone.utc)
+    end = datetime(1970, 1, 1, 23, 0, tzinfo=timezone.utc)
+    gaps = store.get_unfetched_ranges(sid, start=start, end=end)
+    assert gaps[0][0] == start
+    assert gaps[0][1] == end
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+
+def test_sparse_mark_leaves_holes(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 6)
+    store.mark_range_fetched(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 2))
+    store.mark_range_fetched(sid, start=_dt(1970, 1, 5), end=_dt(1970, 1, 5))
+    gaps = store.get_unfetched_ranges(sid, start=start, end=end)
+    assert [(a.date(), b.date()) for a, b in gaps] == [
+        (_dt(1970, 1, 3).date(), _dt(1970, 1, 4).date()),
+        (_dt(1970, 1, 6).date(), _dt(1970, 1, 6).date()),
+    ]
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+
+def test_get_unfetched_ranges_multiple_slices(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    # Write only middle slice (indices 4-7)
+    store.write(
+        sid,
+        [
+            (_dt(1970, 1, 5), 10.0),
+            (_dt(1970, 1, 6), 11.0),
+        ],
+    )
+    missing = store.get_unfetched_ranges(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 12))
+    # Expect two gaps: first slice (0-3) and third slice (8-11)
+    assert [(a.date(), b.date()) for a, b in missing] == [
+        (_dt(1970, 1, 1).date(), _dt(1970, 1, 4).date()),
+        (_dt(1970, 1, 7).date(), _dt(1970, 1, 12).date()),
+    ]
+
+
 def test_checkpoint_optimize_vacuum(tmp_path):
     db_path = tmp_path / "col.sqlite3"
     store = ColumnarSqliteStore(db_path)

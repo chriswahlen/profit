@@ -80,6 +80,8 @@ class ColumnarFxWriter:
             sentinel_f64=self.cfg.sentinel_f64,
         )
 
+        pts = [(_to_utc(p.ts_utc), float(p.rate)) for p in rows]
+        self.store.write(series_id, pts)
         if coverage_start and coverage_end:
             self.store.mark_range_fetched(
                 series_id,
@@ -87,7 +89,4 @@ class ColumnarFxWriter:
                 end=coverage_end,
                 missing_value=self.cfg.sentinel_f64,
             )
-
-        pts = [(_to_utc(p.ts_utc), float(p.rate)) for p in rows]
-        self.store.write(series_id, pts)
         return len(pts)

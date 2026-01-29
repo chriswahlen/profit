@@ -70,10 +70,10 @@ def _build_parser() -> ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     ensure_profit_conf_loaded()
     parser = _build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -116,18 +116,28 @@ def main() -> None:
         field="rate",
         step_us=cfg.step_us,
     )
-    if series_id is not None and store.is_range_complete(series_id, start=start, end=end):
-        print("Range already complete in columnar store; skipping fetch.")
-        pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
-        print(f"Read back {len(pts)} points:")
-        for ts, rate in pts:
-            print(f"  {ts.date().isoformat()} rate={rate}")
-        return
+    missing_ranges: list[tuple[datetime, datetime]] = []
+    if series_id is not None:
+        missing_ranges = store.get_unfetched_ranges(series_id, start=start, end=end)
+        if not missing_ranges:
+            print("Range already complete in columnar store; skipping fetch.")
+            pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
+            print(f"Read back {len(pts)} points:")
+            for ts, rate in pts:
+                print(f"  {ts.date().isoformat()} rate={rate}")
+            return
 
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
     fetcher = YFinanceFxDailyFetcher(cache=cache, max_window_days=30)
-    print(f"Fetching FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
-    rates = fetcher.timeseries_fetch(req, start, end)
+    rates = []
+    if missing_ranges:
+        print(f"Missing {len(missing_ranges)} sub-range(s); fetching only gaps via yfinance...")
+        for gap_start, gap_end in missing_ranges:
+            print(f"  gap: {gap_start.date()} → {gap_end.date()}")
+            rates.extend(fetcher.timeseries_fetch(req, gap_start, gap_end))
+    else:
+        print(f"Fetching FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
+        rates = fetcher.timeseries_fetch(req, start, end)
     if not rates:
         print("Provider returned no rates.")
         return

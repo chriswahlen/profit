@@ -117,12 +117,16 @@ class ColumnarOhlcvWriter:
             points_by_field["close_adj"].append((ts, float(bar.close_adj)))
             points_by_field["volume_adj"].append((ts, float(bar.volume_adj)))
 
-        if coverage_start and coverage_end:
-            for series_id in series_ids.values():
-                self.store.mark_range_fetched(series_id, start=coverage_start, end=coverage_end, missing_value=self.cfg.sentinel_f64)
-
         counts: dict[str, int] = {}
         for field, series_id in series_ids.items():
             self.store.write(series_id, points_by_field[field])
             counts[field] = len(points_by_field[field])
+        if coverage_start and coverage_end:
+            for series_id in series_ids.values():
+                self.store.mark_range_fetched(
+                    series_id,
+                    start=coverage_start,
+                    end=coverage_end,
+                    missing_value=self.cfg.sentinel_f64,
+                )
         return counts

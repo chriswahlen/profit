@@ -494,6 +494,60 @@ class ColumnarSqliteStore:
                 self._store_slice(cfg, slice_start, values, offsets)
             slice_start += cfg.window_points
 
+    def get_unfetched_ranges(
+        self,
+        series_id: int,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, datetime]]:
+        """
+        Return a list of contiguous sub-ranges within [start, end] that are still unfetched.
+        """
+        cfg = self.get_series(series_id)
+        start_us = _dt_to_us(start)
+        end_us = _dt_to_us(end)
+        if start_us > end_us:
+            raise ValueError("start must be <= end")
+        if end_us < cfg.grid_origin_ts_us:
+            return []
+
+        start_us = max(start_us, cfg.grid_origin_ts_us)
+        start_idx = (start_us - cfg.grid_origin_ts_us) // cfg.step_us
+        end_idx = (end_us - cfg.grid_origin_ts_us) // cfg.step_us
+        start_slice = (start_idx // cfg.window_points) * cfg.window_points
+        end_slice = (end_idx // cfg.window_points) * cfg.window_points
+
+        unfetched_ranges: list[tuple[int, int]] = []
+        current_range: tuple[int, int] | None = None
+
+        slice_start = int(start_slice)
+        while slice_start <= int(end_slice):
+            values, _offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            for pos in range(cfg.window_points):
+                idx = slice_start + pos
+                if idx < int(start_idx) or idx > int(end_idx):
+                    continue
+                if _is_unfetched(values[pos], cfg):
+                    if current_range is None:
+                        current_range = (idx, idx)
+                    else:
+                        current_range = (current_range[0], idx)
+                else:
+                    if current_range is not None:
+                        unfetched_ranges.append(current_range)
+                        current_range = None
+            slice_start += cfg.window_points
+
+        if current_range is not None:
+            unfetched_ranges.append(current_range)
+
+        def idx_to_dt(idx: int) -> datetime:
+            ts_us = cfg.grid_origin_ts_us + idx * cfg.step_us
+            return _us_to_dt(ts_us)
+
+        return [(idx_to_dt(r0), idx_to_dt(r1)) for r0, r1 in unfetched_ranges]
+
     def is_range_complete(self, series_id: int, *, start: datetime, end: datetime) -> bool:
         """
         Return True if every point in [start, end] has been fetched (i.e., no unfetched sentinel).
