@@ -507,6 +507,312 @@ def test_index_overflow_guard(monkeypatch, tmp_path):
         store.write(sid, [(_dt(1970, 1, 1), 1.0)])
 
 
+def test_mixed_compression_coexistence(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    store = ColumnarSqliteStore(db_path)
+    sid_plain = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        compression="none",
+    )
+    sid_zlib = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        compression="zlib",
+    )
+    store.write(sid_plain, [(_dt(1970, 1, 1), 1.0)])
+    store.write(sid_zlib, [(_dt(1970, 1, 1), 2.0)])
+
+    assert store.read_slice_values(sid_plain, 0)[0] == 1.0
+    assert store.read_slice_values(sid_zlib, 0)[0] == 2.0
+
+
+def test_boundary_aligned_writes(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=3,  # boundaries at 0,3,6...
+    )
+    # Point exactly at boundary index 3 should land in second slice.
+    store.write(sid, [(_dt(1970, 1, 4), 4.0)])
+    # First slice was never created; read with require_existing=False via read_points.
+    pts = store.read_points(sid, start=_dt(1970, 1, 4), end=_dt(1970, 1, 4))
+    assert len(pts) == 1 and pts[0][1] == 4.0
+
+
+def test_offsets_with_sentinel_filtering(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        offsets_enabled=True,
+        sentinel_f64=float("nan"),
+    )
+    ts_real = datetime(1970, 1, 2, 12, 0, tzinfo=timezone.utc)
+    store.write(
+        sid,
+        [
+            (_dt(1970, 1, 1), float("nan")),  # sentinel
+            (ts_real, 99.0),
+        ],
+    )
+    pts = store.read_points(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 2), include_sentinel=False)
+    assert len(pts) == 1
+    assert pts[0][0] == ts_real and pts[0][1] == 99.0
+
+
+def test_offsets_overflow_guard(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        offsets_enabled=True,
+    )
+    # Offset > int32 ms should fail. Construct a timestamp just beyond 24h within the same bucket.
+    ts = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc) + timedelta(days=1, milliseconds=2147483648 / 1000)
+    with pytest.raises(ValueError):
+        store.write(sid, [(ts, 1.0)])
+
+
+def test_schema_invariants_on_create(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    with pytest.raises(ValueError):
+        store.create_series(
+            instrument_id="AAPL",
+            dataset="bar_ohlcv",
+            field="close",
+            step_us=0,  # invalid
+            grid_origin_ts_us=0,
+            window_points=2,
+        )
+    with pytest.raises(ValueError):
+        store.create_series(
+            instrument_id="AAPL",
+            dataset="bar_ohlcv",
+            field="close",
+            step_us=DAY_US,
+            grid_origin_ts_us=0,
+            window_points=0,  # invalid
+        )
+    with pytest.raises(ValueError):
+        store.create_series(
+            instrument_id="AAPL",
+            dataset="bar_ohlcv",
+            field="close",
+            step_us=DAY_US,
+            grid_origin_ts_us=0,
+            window_points=2,
+            compression="brotli",  # invalid
+        )
+
+
+def test_gap_in_range_does_not_emit_points(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=3,
+        sentinel_f64=float("nan"),
+    )
+    # Only write first day; leave a gap for the rest of the range.
+    store.write(sid, [(_dt(1970, 1, 1), 1.0)])
+    pts = store.read_points(
+        sid,
+        start=_dt(1970, 1, 1),
+        end=_dt(1970, 1, 3),
+        include_sentinel=False,
+    )
+    assert len(pts) == 1
+    assert pts[0][1] == 1.0
+
+
+def test_concurrent_writers_same_db(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    store1 = ColumnarSqliteStore(db_path)
+    store2 = ColumnarSqliteStore(db_path)
+    sid = store1.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    store1.write(sid, [(_dt(1970, 1, 1), 1.0)])
+    store2.write(sid, [(_dt(1970, 1, 2), 2.0)])
+    pts = store1.read_points(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 2), include_sentinel=False)
+    assert [p[1] for p in pts] == [1.0, 2.0]
+
+
+def test_unique_series_constraint(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.create_series(
+            instrument_id="AAPL",
+            dataset="bar_ohlcv",
+            field="close",
+            step_us=DAY_US,
+            grid_origin_ts_us=0,
+            window_points=2,
+        )
+
+
+def test_offsets_negative_roundtrip(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        offsets_enabled=True,
+    )
+    ts = datetime(1970, 1, 2, 0, 0, tzinfo=timezone.utc) - timedelta(hours=3)  # -3h relative to nominal day bucket
+    store.write(sid, [(ts, 9.0)])
+    pts = store.read_points(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 2), include_sentinel=False)
+    assert pts[0][0] == ts and pts[0][1] == 9.0
+
+
+def test_checksum_catches_offset_corruption(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    store = ColumnarSqliteStore(db_path)
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        offsets_enabled=True,
+        checksum_enabled=True,
+    )
+    store.write(sid, [(_dt(1970, 1, 2, 12, 0), 5.0)])
+    con = sqlite3.connect(db_path)
+    cur = con.execute("SELECT offsets_blob FROM __col_slice__ WHERE series_id=? AND start_index=0", (sid,))
+    original = cur.fetchone()[0]
+    mutated = bytes([original[0] ^ 0xAA]) + original[1:]
+    con.execute(
+        "UPDATE __col_slice__ SET offsets_blob = ? WHERE series_id=? AND start_index=0",
+        (sqlite3.Binary(mutated), sid),
+    )
+    con.commit()
+    con.close()
+    with pytest.raises(SliceCorruptionError):
+        store.read_slice_values(sid, 0)
+
+
+def test_large_window_with_compression(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=512,
+        compression="zlib",
+    )
+    store.write(sid, [(_dt(1970, 1, 1 + i), float(i)) for i in range(10)])
+    vals = store.read_slice_values(sid, 0)
+    assert vals[0] == 0.0 and vals[9] == 9.0
+
+
+def test_cross_series_isolation(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid1 = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    sid2 = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    store.write(sid1, [(_dt(1970, 1, 1), 1.0)])
+    store.write(sid2, [(_dt(1970, 1, 1), 2.0)])
+    assert store.read_slice_values(sid1, 0)[0] == 1.0
+    assert store.read_slice_values(sid2, 0)[0] == 2.0
+
+
+def test_checksum_disabled_truncated_blob_raises_decode(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    store = ColumnarSqliteStore(db_path)
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        checksum_enabled=False,
+    )
+    store.write(sid, [(_dt(1970, 1, 1), 1.0)])
+    con = sqlite3.connect(db_path)
+    con.execute(
+        "UPDATE __col_slice__ SET values_blob = x'00' WHERE series_id=? AND start_index=0",
+        (sid,),
+    )
+    con.commit()
+    con.close()
+    with pytest.raises(ValueError):
+        store.read_slice_values(sid, 0)
+
+
+def test_include_sentinel_true_with_nan(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+        sentinel_f64=float("nan"),
+    )
+    store.write(sid, [(_dt(1970, 1, 1), float("nan"))])
+    pts = store.read_points(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 1), include_sentinel=True)
+    assert math.isnan(pts[0][1])
+
+
 def test_corrupt_offsets_checksum(tmp_path):
     db_path = tmp_path / "col.sqlite3"
     store = ColumnarSqliteStore(db_path)
