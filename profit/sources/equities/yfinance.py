@@ -31,9 +31,10 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
         version: str = "v1",
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = 30,
+        max_batch_size: int | None = 50,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(max_batch_size=max_batch_size, **kwargs)
         from profit.sources.equities.coverage_adapter import EquitiesCoverageAdapter
 
         self.source = source
