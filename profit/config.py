@@ -113,7 +113,6 @@ def add_common_cli_args(
     *,
     cache_help_subdir: str = "fetcher",
     default_store_filename: str = "columnar.sqlite3",
-    include_catalog_path: bool = False,
 ):
     """
     Add shared CLI arguments for cache/store/log level.
@@ -138,5 +137,10 @@ def add_common_cli_args(
         "--log-level",
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING...). Default: INFO",
+    )
+    parser.add_argument(
+        "--refresh-catalog",
+        action="store_true",
+        help="Force catalog refresh before fetching.",
     )
     return parser
