@@ -44,6 +44,13 @@ These guidelines define how changes should be made in this repository to keep th
 - For fetchers: when a source supports local coverage (e.g., columnar store), implement a coverage adapter in the fetcher itself and require the store at construction time. The  call sites (scripts/jobs) should just supply the store, not wire adapters manually.
 - Rely on BaseFetcher to handle backoff, retry, start/end date windowing, etc.
 
+## Logging for fetchers
+- Always log provider, symbol/code, and window on network calls at INFO; include `points=<count>` on success.
+- Log rate-limit or unexpected-payload situations at WARNING with the provider code and truncated note/keys; never log API keys.
+- For empty/zero-point responses, log INFO (`empty series`) so coverage/cache issues are diagnosable.
+- Keep retries/backoff messages in BaseFetcher; fetcher-specific logs should stay concise and structured (key=value pairs where practical).
+- Do not log request bodies or credentials; if a payload must be logged for debugging, strip sensitive fields first.
+
 ## When unsure
 - Ask for clarification on requirements (data source, schema expectations, performance constraints).
 - Default to the simplest solution that preserves future extensibility.
