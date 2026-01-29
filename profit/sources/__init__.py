@@ -9,6 +9,7 @@ from .commodities.base import (
     CommodityDailyPrice,
     CommodityDailyRequest,
 )
+from .commodities.goldapi import GoldApiCommoditiesFetcher
 from .types import Fingerprintable
 
 __all__ = ["BaseFetcher", "BatchFetcher", "Fingerprintable"]
