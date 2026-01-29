@@ -41,6 +41,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         sleep_fn: Callable[[float], None] = time.sleep,
         max_batch_size: Optional[int] = None,
         lifecycle: LifecycleReader | None = None,
+        catalog_checker=None,
     ) -> None:
         self.cache = cache or FileCache(ttl=ttl)
         self.ttl = ttl
@@ -56,6 +57,9 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if lifecycle is None:
             raise ValueError("lifecycle reader is required")
         self.lifecycle = lifecycle
+        if catalog_checker is None:
+            raise ValueError("catalog checker is required")
+        self.catalog_checker = catalog_checker
 
     # Public API ---------------------------------------------------------
     def timeseries_fetch_many(
@@ -84,6 +88,13 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if start > end:
             raise ValueError("start must be <= end")
 
+        # Ensure catalog freshness once per provider (assume uniform provider across requests).
+        providers = {getattr(r, "provider", None) for r in requests}
+        if None in providers:
+            raise ValueError("Requests must expose provider for catalog enforcement")
+        for p in providers:
+            self.catalog_checker.ensure_fresh(str(p))
+
         # Lifecycle clipping per request.
         windows_by_req: dict[RequestT, Tuple[datetime, datetime]] = {}
         skipped_errors: dict[RequestT, InactiveInstrumentError] = {}
@@ -92,6 +103,20 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
             provider_code = getattr(req, "provider_code", None)
             if provider is None or provider_code is None:
                 raise ValueError("Request must expose provider and provider_code for lifecycle enforcement")
+
+            try:
+                self.catalog_checker.require_present(str(provider), str(provider_code))
+            except Exception as exc:
+                skipped_errors[req] = InactiveInstrumentError(
+                    str(provider),
+                    str(provider_code),
+                    reason="not_in_catalog",
+                    requested_start=start,
+                    requested_end=end,
+                    active_from=None,
+                    active_to=None,
+                )
+                continue
 
             lc = self.lifecycle.get_lifecycle(str(provider), str(provider_code))
             if lc is None:

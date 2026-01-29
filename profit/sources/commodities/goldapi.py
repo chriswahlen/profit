@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List
 import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Callable, Dict, List
 
 import requests
 
 from profit.catalog import FetcherDescription
+from profit.catalog.lifecycle import CatalogLifecycleReader
+from profit.catalog.refresher import CatalogChecker
+from profit.catalog.store import CatalogStore
 from profit.sources.commodities.base import (
     CommoditiesDailyFetcher,
     CommodityDailyPrice,
@@ -43,10 +47,34 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = None,
         max_batch_size: int | None = 1,
-        lifecycle,
+        lifecycle=None,
+        catalog_checker=None,
+        catalog_path: str | Path | None = None,
+        allow_network: bool = True,
+        max_catalog_age_days: float = 7.0,
         **kwargs,
     ) -> None:
-        super().__init__(max_window_days=max_window_days, max_batch_size=max_batch_size, lifecycle=lifecycle, **kwargs)
+        if lifecycle is None or catalog_checker is None:
+            cat_path = Path(catalog_path) if catalog_path is not None else Path("columnar.sqlite3")
+            cat_path.parent.mkdir(parents=True, exist_ok=True)
+            cat_store = CatalogStore(cat_path, readonly=False)
+            lifecycle = CatalogLifecycleReader(cat_store)
+            from profit.sources.commodities.goldapi_refresher import GoldApiRefresher
+
+            catalog_checker = CatalogChecker(
+                store=cat_store,
+                refresher=GoldApiRefresher(cat_store),
+                max_age=timedelta(days=max_catalog_age_days),
+                allow_network=allow_network,
+            )
+
+        super().__init__(
+            max_window_days=max_window_days,
+            max_batch_size=max_batch_size,
+            lifecycle=lifecycle,
+            catalog_checker=catalog_checker,
+            **kwargs,
+        )
         self.source = source
         self.version = version
         self.base_url = base_url.rstrip("/")

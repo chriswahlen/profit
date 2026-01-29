@@ -23,4 +23,4 @@ python scripts/fetch_fx.py --base EUR --quote USD --start 2025-01-01 --end 2025-
 - Load yfinance equities from a CSV symbol list: `python scripts/catalog_load.py yfinance-equities --csv symbols.csv --ticker-col Symbol --default-mic XNAS`
 - Load FX pairs (defaults to major pairs): `python scripts/catalog_load.py yfinance-fx --pairs EURUSD,GBPUSD`
 - Seed goldapi instruments: `python scripts/catalog_load.py goldapi`
-- Catalog is required: fetch scripts read lifecycle from `PROFIT_DATA_ROOT/catalog.sqlite3` (override with `--catalog-path`) and will clip/skip requests outside `active_from/active_to`.
+- Catalog is required: fetch scripts read lifecycle from the same SQLite file as the columnar store by default (override with `--catalog-path`) and will clip/skip requests outside `active_from/active_to`.

@@ -66,6 +66,13 @@ class CatalogStore:
 
             CREATE INDEX IF NOT EXISTS idx_instrument_catalog_id ON instrument_catalog(instrument_id);
             CREATE INDEX IF NOT EXISTS idx_identifier_map_instr ON identifier_map(instrument_id);
+
+            CREATE TABLE IF NOT EXISTS catalog_meta (
+                provider TEXT PRIMARY KEY,
+                refreshed_at TEXT NOT NULL,
+                source_version TEXT,
+                row_count INTEGER
+            );
             """
         )
         self.conn.commit()
@@ -206,3 +213,33 @@ class CatalogStore:
             active_to=_str_to_dt(row["active_to"]) if row["active_to"] else None,
             attrs=parsed_attrs,
         )
+
+    # Meta helpers -------------------------------------------------------
+    def read_meta(self, provider: str) -> dict | None:
+        cur = self.conn.execute(
+            "SELECT provider, refreshed_at, source_version, row_count FROM catalog_meta WHERE provider = ?",
+            (provider,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "provider": row["provider"],
+            "refreshed_at": _str_to_dt(row["refreshed_at"]),
+            "source_version": row["source_version"],
+            "row_count": row["row_count"],
+        }
+
+    def write_meta(self, provider: str, refreshed_at: datetime, *, source_version: str | None, row_count: int) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO catalog_meta(provider, refreshed_at, source_version, row_count)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(provider) DO UPDATE SET
+                refreshed_at=excluded.refreshed_at,
+                source_version=excluded.source_version,
+                row_count=excluded.row_count;
+            """,
+            (provider, _dt_to_str(refreshed_at), source_version, row_count),
+        )
+        self.conn.commit()

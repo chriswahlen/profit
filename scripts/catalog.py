@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 from profit.catalog import CatalogService, CatalogStore
-from profit.config import ensure_profit_conf_loaded, get_catalog_db_path
+from profit.config import ensure_profit_conf_loaded, get_columnar_db_path
 
 
 def _build_parser() -> ArgumentParser:
@@ -15,12 +15,6 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--provider", default=None, help="Filter by provider code (e.g., yfinance, goldapi).")
     parser.add_argument("--limit", type=int, default=20, help="Max rows to return (default: 20).")
     parser.add_argument("--offset", type=int, default=0, help="Row offset for paging.")
-    parser.add_argument(
-        "--catalog-path",
-        type=Path,
-        default=None,
-        help="Path to catalog SQLite DB (default: PROFIT_DATA_ROOT/catalog.sqlite3).",
-    )
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -39,7 +33,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    db_path = get_catalog_db_path(args=args)
+    db_path = get_columnar_db_path(args=args)
     store = CatalogStore(db_path, readonly=True)
     service = CatalogService(store)
 

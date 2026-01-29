@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.catalog import CatalogStore
-from profit.catalog.lifecycle import CatalogLifecycleReader
-from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args, get_catalog_db_path
+from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
 from profit.sources.commodities.base import CommodityDailyRequest
 from profit.sources.commodities.columnar import ColumnarCommodityConfig, DAY_US
 
@@ -72,8 +70,7 @@ def _build_parser() -> ArgumentParser:
         parser,
         cache_help_subdir="commodities_fetcher",
         default_store_filename="columnar.sqlite3",
-        include_catalog_path=True,
-        default_catalog_filename="catalog.sqlite3",
+        include_catalog_path=False,
     )
     return parser
 
@@ -95,23 +92,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         base_cache_dir.mkdir(parents=True, exist_ok=True)
         cache = FileCache(base_dir=base_cache_dir / "commodities_fetcher")
 
-    store = ColumnarSqliteStore(db_path=get_columnar_db_path(args=args))
+    store_path = get_columnar_db_path(args=args)
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    store = ColumnarSqliteStore(db_path=store_path)
     cfg = ColumnarCommodityConfig()
     dataset = cfg.dataset_name(source=provider, version="v1")
 
     from profit.sources.commodities.goldapi import GoldApiCommoditiesFetcher
 
-    catalog_path = get_catalog_db_path(args=args)
-    if not catalog_path.exists():
-        parser.error(f"Catalog not found at {catalog_path}; lifecycle metadata required.")
-    catalog_store = CatalogStore(catalog_path, readonly=True)
-    lifecycle = CatalogLifecycleReader(catalog_store)
-
     fetcher = GoldApiCommoditiesFetcher(
         cache=cache,
         api_key=args.api_key,
         max_window_days=None,
-        lifecycle=lifecycle,
+        catalog_path=args.catalog_path or store_path,
+        allow_network=True,
     )
     # Inject store for coverage adapter
     fetcher._coverage_store = store  # type: ignore[attr-defined]
@@ -146,38 +140,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if start > end:
         parser.error("--start must be <= --end")
 
-    clipped_start, clipped_end = start, end
-    try:
-        catalog_path = get_catalog_db_path(args=args)
-        catalog_store = CatalogStore(catalog_path, readonly=True)
-        li = lookup_and_clip(
-            catalog_store,
-            provider=provider,
-            provider_code=request.provider_code,
-            start=start,
-            end=end,
-            hard_fail=True,
-        )
-        if li:
-            if li.is_empty:
-                parser.error(
-                    f"Requested window {start.date()}–{end.date()} is outside lifecycle "
-                    f"{li.active_start.date()}–{(li.active_end.date() if li.active_end else 'open')}"
-                )
-            if not li.is_full:
-                print(
-                    f"Clipping to active lifecycle window {li.clipped_start.date()} → {li.clipped_end.date()} "
-                    f"(requested {start.date()} → {end.date()}, active {li.active_start.date()} → "
-                    f"{li.active_end.date() if li.active_end else 'open'})"
-                )
-            clipped_start, clipped_end = li.clipped_start, li.clipped_end
-    except Exception:
-        pass
-
     print(
-        f"Ensuring coverage for {request.instrument_id} {clipped_start.date()} → {clipped_end.date()} via {provider}..."
+        f"Ensuring coverage for {request.instrument_id} {start.date()} → {end.date()} via {provider}..."
     )
-    fetcher.timeseries_fetch_many([request], clipped_start, clipped_end)
+    fetcher.timeseries_fetch_many([request], start, end)
 
     if args.read_back:
         series_id = store.get_series_id(

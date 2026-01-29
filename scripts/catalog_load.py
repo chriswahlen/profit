@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from profit.catalog import CatalogService, CatalogStore, InstrumentRecord
-from profit.config import ensure_profit_conf_loaded, get_catalog_db_path
+from profit.config import ensure_profit_conf_loaded, get_columnar_db_path
 
 
 MAJOR_FX_PAIRS = [
@@ -60,12 +60,6 @@ def _build_parser() -> ArgumentParser:
     # goldapi
     sub.add_parser("goldapi", help="Load gold/silver instrument rows for goldapi provider.")
 
-    parser.add_argument(
-        "--catalog-path",
-        type=Path,
-        default=None,
-        help="Path to catalog SQLite DB (default: PROFIT_DATA_ROOT/catalog.sqlite3).",
-    )
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -186,9 +180,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    db_path = get_catalog_db_path(args=args)
+    db_path = get_columnar_db_path(args=args)
     store = CatalogStore(db_path, readonly=False)
-    service = CatalogService(store)
 
     if args.provider == "yfinance-equities":
         written = load_yfinance_equities(args, store)

@@ -68,20 +68,6 @@ def get_columnar_db_path(*, args=None, filename: str = "columnar.sqlite3") -> Pa
     return get_data_root() / filename
 
 
-def get_catalog_db_path(*, args=None, filename: str = "catalog.sqlite3") -> Path:
-    """
-    Resolve catalog path:
-    - If CLI args provides catalog_path, use it.
-    - Else env/ ~/.profit.conf via PROFIT_CATALOG_PATH/PROFIT_CATALOG/PROFIT_CATALOG_DB.
-    - Else default to PROFIT_DATA_ROOT/<filename>.
-    """
-    if args is not None and getattr(args, "catalog_path", None):
-        return Path(args.catalog_path)
-    env_val = get_setting("PROFIT_CATALOG_PATH", "PROFIT_CATALOG", "PROFIT_CATALOG_DB")
-    if env_val:
-        return Path(env_val)
-    return get_data_root() / filename
-
 
 def _reset_for_tests() -> None:  # pragma: no cover - test helper
     global _CONFIG_LOADED
@@ -128,7 +114,7 @@ def add_common_cli_args(
     cache_help_subdir: str = "fetcher",
     default_store_filename: str = "columnar.sqlite3",
     include_catalog_path: bool = False,
-    default_catalog_filename: str = "catalog.sqlite3",
+    default_catalog_filename: str = "columnar.sqlite3",
 ):
     """
     Add shared CLI arguments for cache/store/log level.
@@ -154,11 +140,5 @@ def add_common_cli_args(
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING...). Default: INFO",
     )
-    if include_catalog_path:
-        parser.add_argument(
-            "--catalog-path",
-            type=Path,
-            default=None,
-            help=f"Path to catalog SQLite DB (default: PROFIT_DATA_ROOT/{default_catalog_filename} or PROFIT_CATALOG_PATH)",
-        )
+    # catalog_path flag removed; catalog always co-located with store.
     return parser

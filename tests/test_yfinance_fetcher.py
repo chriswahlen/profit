@@ -7,6 +7,10 @@ import pytest
 from profit.sources.equities import EquityDailyBarsRequest, YFinanceDailyBarsFetcher
 from profit.sources.types import LifecycleReader
 
+class _NoopCatalogChecker:
+    def ensure_fresh(self, provider: str): ...
+    def require_present(self, provider: str, provider_code: str): ...
+
 
 class _AlwaysActiveLifecycle(LifecycleReader):
     def get_lifecycle(self, provider: str, provider_code: str):
@@ -32,7 +36,12 @@ def test_yfinance_fetcher_handles_multiindex(monkeypatch):
 
     monkeypatch.setattr("profit.sources.equities.yfinance.yf", type("YF", (), {"download": fake_download}))
 
-    fetcher = YFinanceDailyBarsFetcher(cache=None, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
+    fetcher = YFinanceDailyBarsFetcher(
+        cache=None,
+        max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+    )
     req = EquityDailyBarsRequest(
         instrument_id="AAPL|XNAS",
         provider="yfinance",

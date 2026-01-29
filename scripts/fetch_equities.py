@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.catalog import CatalogStore
-from profit.catalog.lifecycle import CatalogLifecycleReader
-from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args, get_catalog_db_path
+from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
 from profit.sources.equities import (
     ColumnarOhlcvConfig,
     ColumnarOhlcvWriter,
@@ -57,8 +55,7 @@ def _build_parser() -> ArgumentParser:
         parser,
         cache_help_subdir="fetcher",
         default_store_filename="columnar.sqlite3",
-        include_catalog_path=True,
-        default_catalog_filename="catalog.sqlite3",
+        include_catalog_path=False,
     )
     return parser
 
@@ -114,18 +111,20 @@ def main(argv: Sequence[str] | None = None) -> None:
     os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
     yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    store = ColumnarSqliteStore(db_path=get_columnar_db_path(args=args))
+    store_path = get_columnar_db_path(args=args)
+    store = ColumnarSqliteStore(db_path=store_path)
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
-    catalog_path = get_catalog_db_path(args=args)
-    if not catalog_path.exists():
-        parser.error(f"Catalog not found at {catalog_path}; lifecycle metadata required.")
-
-    catalog_store = CatalogStore(catalog_path, readonly=True)
-    lifecycle = CatalogLifecycleReader(catalog_store)
 
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
-    fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store, lifecycle=lifecycle)
+    fetcher = YFinanceDailyBarsFetcher(
+        cache=cache,
+        store=store,
+        catalog_path=args.catalog_path or store_path,
+        cache_root=base_cache_dir,
+        allow_network=True,
+        include_etf=False,
+    )
 
     if args.describe:
         desc = fetcher.describe()

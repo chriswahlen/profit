@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable
 
 from profit.catalog import FetcherDescription
+from profit.catalog.lifecycle import CatalogLifecycleReader
+from profit.catalog.refresher import CatalogChecker
+from profit.catalog.store import CatalogStore
+from profit.sources.equities.yfinance_refresher import YFinanceEquitiesRefresher
 from profit.sources.equities import EquityDailyBar, EquityDailyBarsRequest, EquitiesDailyFetcher
 from profit.sources.errors import ThrottledError
 
@@ -33,10 +38,42 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = 30,
         max_batch_size: int | None = 50,
-        lifecycle,
+        lifecycle=None,
+        catalog_checker=None,
+        catalog_path: str | Path | None = None,
+        cache_root: str | Path | None = None,
+        allow_network: bool = True,
+        max_catalog_age_days: float = 1.0,
+        include_etf: bool = False,
+        default_currency: str = "USD",
         **kwargs,
     ) -> None:
-        super().__init__(max_batch_size=max_batch_size, lifecycle=lifecycle, **kwargs)
+        if lifecycle is None or catalog_checker is None:
+            cat_path = Path(catalog_path) if catalog_path is not None else Path(store.db_path)
+            cat_path.parent.mkdir(parents=True, exist_ok=True)
+            cat_store = CatalogStore(cat_path, readonly=False)
+            lifecycle = CatalogLifecycleReader(cat_store)
+            cache_root = Path(cache_root) if cache_root is not None else cat_path.parent
+            catalog_checker = CatalogChecker(
+                store=cat_store,
+                refresher=YFinanceEquitiesRefresher(
+                    cat_store,
+                    cache_root=cache_root,
+                    include_etf=include_etf,
+                    default_mic="XNAS",
+                    default_currency=default_currency,
+                    grace_days=1.0,
+                ),
+                max_age=timedelta(days=max_catalog_age_days),
+                allow_network=allow_network,
+            )
+
+        super().__init__(
+            max_batch_size=max_batch_size,
+            lifecycle=lifecycle,
+            catalog_checker=catalog_checker,
+            **kwargs,
+        )
         from profit.sources.equities.coverage_adapter import EquitiesCoverageAdapter
 
         self.source = source

@@ -8,6 +8,11 @@ from profit.sources.fx import FxDailyFetcher, FxRatePoint, FxRequest, YFinanceFx
 from profit.sources.types import LifecycleReader
 
 
+class _NoopCatalogChecker:
+    def ensure_fresh(self, provider: str): ...
+    def require_present(self, provider: str, provider_code: str): ...
+
+
 class _AlwaysActiveLifecycle(LifecycleReader):
     def get_lifecycle(self, provider: str, provider_code: str):
         return datetime(1900, 1, 1, tzinfo=timezone.utc), None
@@ -20,7 +25,7 @@ def _dt(y: int, m: int, d: int) -> datetime:
 def test_fx_fetcher_dedup_and_sort():
     class FakeFxFetcher(FxDailyFetcher):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), **kwargs)
+            super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
 
         def _fetch_timeseries_chunk_many(self, requests, start, end):
             results = {}
@@ -66,7 +71,12 @@ def test_yfinance_fx_handles_dataframe(monkeypatch):
 
     monkeypatch.setattr("profit.sources.fx.yfinance.yf", type("YF", (), {"download": fake_download}))
 
-    fetcher = YFinanceFxDailyFetcher(cache=None, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
+    fetcher = YFinanceFxDailyFetcher(
+        cache=None,
+        max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+    )
     req = FxRequest(base_ccy="EUR", quote_ccy="USD", provider="yfinance", provider_code="EURUSD=X")
     pts = fetcher.timeseries_fetch_many([req], _dt(2025, 1, 2), _dt(2025, 1, 2))[0]
     assert len(pts) == 1

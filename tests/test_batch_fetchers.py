@@ -10,6 +10,13 @@ from profit.sources.errors import ThrottledError
 from profit.sources.fx import FxRatePoint, FxRequest, YFinanceFxDailyFetcher
 from profit.sources.types import LifecycleReader
 
+class _NoopCatalogChecker:
+    def ensure_fresh(self, provider: str):
+        return
+
+    def require_present(self, provider: str, provider_code: str):
+        return
+
 
 class _AlwaysActiveLifecycle(LifecycleReader):
     def get_lifecycle(self, provider: str, provider_code: str):
@@ -22,7 +29,7 @@ def _dt(y: int, m: int, d: int) -> datetime:
 
 class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), **kwargs)
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
         self.batch_calls: list[list[EquityDailyBarsRequest]] = []
 
     def _fetch_timeseries_chunk_many(self, requests, start, end):
@@ -79,7 +86,7 @@ class _SimpleRequest:
 
 class _ThrottlingBatchFetcher(BaseFetcher[_SimpleRequest, list[str]]):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), **kwargs)
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
         self.attempts = 0
         self.sleeps: list[float] = []
 
