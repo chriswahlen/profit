@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from profit.catalog import FetcherDescription
 from profit.sources.fx.base import FxDailyFetcher, FxRatePoint, FxRequest
 from profit.sources.errors import ThrottledError
 
@@ -38,6 +39,17 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
         self.max_window_days = max_window_days
         self._coverage_store = store
         self._coverage_adapter_cls = FxCoverageAdapter
+
+    def describe(self) -> FetcherDescription:
+        return FetcherDescription(
+            provider=self.source,
+            dataset="fx_rate",
+            version=self.version,
+            freqs=["1d"],
+            fields=["rate"],
+            max_window_days=self.max_window_days,
+            notes="Daily FX close from yfinance multi-symbol download.",
+        )
 
     def coverage_adapter(self, request: FxRequest):
         return self._coverage_adapter_cls(

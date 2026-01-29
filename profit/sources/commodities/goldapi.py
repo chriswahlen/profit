@@ -7,6 +7,7 @@ import os
 
 import requests
 
+from profit.catalog import FetcherDescription
 from profit.sources.commodities.base import (
     CommoditiesDailyFetcher,
     CommodityDailyPrice,
@@ -85,6 +86,17 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
                     prices.append(price)
             out[req] = prices
         return out
+
+    def describe(self) -> FetcherDescription:
+        return FetcherDescription(
+            provider=self.source,
+            dataset="commodity_price",
+            version=self.version,
+            freqs=["1d"],
+            fields=["price", "bid", "ask"],
+            max_window_days=self.max_window_days,
+            notes="Daily gold/silver via goldapi.io; one request per day per symbol.",
+        )
 
     def _iter_days(self, start: datetime, end: datetime):
         cursor = _to_utc(start).date()

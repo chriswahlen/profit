@@ -49,6 +49,11 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Read back inserted rows and print them.",
     )
+    parser.add_argument(
+        "--describe",
+        action="store_true",
+        help="Print fetcher capabilities and exit.",
+    )
     add_common_cli_args(parser, cache_help_subdir="fx_fetcher", default_store_filename="columnar.sqlite3")
     return parser
 
@@ -63,18 +68,37 @@ def main(argv: Sequence[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
+    base_cache_dir = Path(get_cache_root(args=args))
+    base_cache_dir.mkdir(parents=True, exist_ok=True)
+    yf_cache_dir = base_cache_dir / "yfinance"
+    os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
+    yf_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    store = ColumnarSqliteStore(get_columnar_db_path(args=args))
+    cfg = ColumnarFxConfig()
+    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
+    fetcher = YFinanceFxDailyFetcher(cache=cache, store=store)
+
+    if args.describe:
+        desc = fetcher.describe()
+        print("Fetcher capabilities:")
+        print(f"  provider   : {desc.provider}")
+        print(f"  dataset    : {desc.dataset}")
+        print(f"  version    : {desc.version}")
+        print(f"  freqs      : {', '.join(desc.freqs)}")
+        print(f"  fields     : {', '.join(desc.fields)}")
+        print(f"  max_window : {desc.max_window_days}")
+        if desc.notes:
+            print(f"  notes      : {desc.notes}")
+        return
+
     start = _parse_date(args.start)
     end = _parse_date(args.end)
     if start > end:
         parser.error("--start must be <= --end")
 
     provider_code = args.provider_code or f"{args.base}{args.quote}=X"
-
-    base_cache_dir = Path(get_cache_root(args=args))
-    base_cache_dir.mkdir(parents=True, exist_ok=True)
-    yf_cache_dir = base_cache_dir / "yfinance"
-    os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
-    yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
     req = FxRequest(
         base_ccy=args.base.upper(),
@@ -83,12 +107,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         provider_code=provider_code,
     )
 
-    store = ColumnarSqliteStore(get_columnar_db_path(args=args))
-    cfg = ColumnarFxConfig()
-    dataset = cfg.dataset_name(source="yfinance", version="v1")
     pair = f"{req.base_ccy}/{req.quote_ccy}"
-    cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
-    fetcher = YFinanceFxDailyFetcher(cache=cache, store=store)
 
     print(f"Ensuring coverage for FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
     fetcher.timeseries_fetch_many([req], start, end)

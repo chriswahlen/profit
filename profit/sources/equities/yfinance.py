@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from profit.catalog import FetcherDescription
 from profit.sources.equities import EquityDailyBar, EquityDailyBarsRequest, EquitiesDailyFetcher
 from profit.sources.errors import ThrottledError
 
@@ -43,6 +44,28 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
         self.max_window_days = max_window_days
         self._coverage_store = store
         self._coverage_adapter_cls = EquitiesCoverageAdapter
+
+    def describe(self) -> FetcherDescription:
+        return FetcherDescription(
+            provider=self.source,
+            dataset="equity_ohlcv",
+            version=self.version,
+            freqs=["1d"],
+            fields=[
+                "open_raw",
+                "high_raw",
+                "low_raw",
+                "close_raw",
+                "volume_raw",
+                "open_adj",
+                "high_adj",
+                "low_adj",
+                "close_adj",
+                "volume_adj",
+            ],
+            max_window_days=self.max_window_days,
+            notes="Backed by yfinance multi-ticker daily bars; adjusted + raw.",
+        )
 
     def coverage_adapter(self, request: EquityDailyBarsRequest):
         return self._coverage_adapter_cls(

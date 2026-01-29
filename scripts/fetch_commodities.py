@@ -61,6 +61,11 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Skip using on-disk cache (forces network fetch; uses in-memory cache only).",
     )
+    parser.add_argument(
+        "--describe",
+        action="store_true",
+        help="Print fetcher capabilities and exit.",
+    )
     add_common_cli_args(parser, cache_help_subdir="commodities_fetcher", default_store_filename="columnar.sqlite3")
     return parser
 
@@ -74,11 +79,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
-
-    start = _parse_date(args.start)
-    end = _parse_date(args.end)
-    if start > end:
-        parser.error("--start must be <= --end")
 
     mapping = INSTRUMENT_MAP[args.commodity]
     provider = args.provider
@@ -108,6 +108,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     # Inject store for coverage adapter
     fetcher._coverage_store = store  # type: ignore[attr-defined]
+
+    if args.describe:
+        desc = fetcher.describe()
+        print("Fetcher capabilities:")
+        print(f"  provider   : {desc.provider}")
+        print(f"  dataset    : {desc.dataset}")
+        print(f"  version    : {desc.version}")
+        print(f"  freqs      : {', '.join(desc.freqs)}")
+        print(f"  fields     : {', '.join(desc.fields)}")
+        print(f"  max_window : {desc.max_window_days}")
+        if desc.notes:
+            print(f"  notes      : {desc.notes}")
+        return
+
+    start = _parse_date(args.start)
+    end = _parse_date(args.end)
+    if start > end:
+        parser.error("--start must be <= --end")
 
     print(
         f"Ensuring coverage for {request.instrument_id} {start.date()} → {end.date()} via {provider}..."
