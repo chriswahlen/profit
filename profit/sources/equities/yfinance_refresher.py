@@ -34,18 +34,19 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         if provider != "yfinance":
             raise ValueError("YFinanceEquitiesRefresher only supports provider='yfinance'")
         seen_at = datetime.now(timezone.utc)
+        active_from = datetime(1900, 1, 1, tzinfo=timezone.utc)
         symbols_dir = self.cache_root / "symbols" / "yfinance"
         nasdaq_path = symbols_dir / "nasdaqtraded.txt"
         other_path = symbols_dir / "otherlisted.txt"
 
         self._download(
-            "https://www.nasdaqtrader.com/dynamic/SymbolDirectory/nasdaqtraded.txt",
+            "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt",
             nasdaq_path,
             allow_network=allow_network,
             use_cache_only=use_cache_only,
         )
         self._download(
-            "https://www.nasdaqtrader.com/dynamic/SymbolDirectory/otherlisted.txt",
+            "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt",
             other_path,
             allow_network=allow_network,
             use_cache_only=use_cache_only,
@@ -57,7 +58,7 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
 
         if not tickers:
             raise RuntimeError("catalog refresh yfinance produced zero symbols; check downloaded files")
-        logger.info("catalog refresh yfinance symbols=%s", len(tickers))
+        logger.info("catalog refresh yfinance parsed symbols=%s", len(tickers))
         records = [
             InstrumentRecord(
                 instrument_id=f"{sym}|{self.default_mic}",
@@ -66,15 +67,22 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
                 provider_code=sym,
                 mic=self.default_mic,
                 currency=self.default_currency,
-                active_from=seen_at,
+                active_from=active_from,
                 active_to=None,
                 attrs={},
             )
             for sym in tickers
         ]
-        self.store.upsert_instruments(records, last_seen=seen_at)
-        self.store.mark_missing_as_inactive(provider="yfinance", seen_at=seen_at, grace=self.grace_days)
+        written = self.store.upsert_instruments(records, last_seen=seen_at)
+        tombstoned = self.store.mark_missing_as_inactive(provider="yfinance", seen_at=seen_at, grace=self.grace_days)
         self.store.write_meta(provider="yfinance", refreshed_at=seen_at, source_version=None, row_count=len(tickers))
+        logger.info(
+            "catalog refresh yfinance done parsed=%s written=%s tombstoned=%s total_meta=%s",
+            len(tickers),
+            written,
+            tombstoned,
+            len(tickers),
+        )
 
     def _download(self, url: str, dest: Path, *, allow_network: bool, use_cache_only: bool) -> Path:
         if dest.exists() and use_cache_only:
@@ -83,8 +91,25 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
             raise RuntimeError(f"Catalog refresh needs network to fetch {url}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         logger.info("catalog download url=%s dest=%s", url, dest)
+        if url.startswith("ftp://"):
+            import urllib.request
+
+            with urllib.request.urlopen(url) as resp:  # type: ignore
+                content = resp.read()
+            dest.write_bytes(content)
+            return dest
+
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
+        # Basic guard against HTML/error payloads.
+        if resp.content.strip().startswith(b"<"):
+            logger.warning(
+                "catalog download unexpected HTML url=%s status=%s headers=%s",
+                url,
+                resp.status_code,
+                dict(resp.headers),
+            )
+            raise RuntimeError(f"Unexpected HTML response for {url}")
         dest.write_bytes(resp.content)
         return dest
 

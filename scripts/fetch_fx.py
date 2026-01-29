@@ -59,6 +59,11 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Print fetcher capabilities and exit.",
     )
+    parser.add_argument(
+        "--refresh-catalog",
+        action="store_true",
+        help="Force catalog refresh before fetching.",
+    )
     add_common_cli_args(
         parser,
         cache_help_subdir="fx_fetcher",
@@ -97,6 +102,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         allow_network=True,
         include_etf=True,
     )
+
+    if args.refresh_catalog:
+        from profit.catalog.refresher import CatalogChecker
+        from profit.sources.equities.yfinance_refresher import YFinanceEquitiesRefresher
+
+        checker = CatalogChecker(
+            store=fetcher.lifecycle.store,  # type: ignore[attr-defined]
+            refresher=YFinanceEquitiesRefresher(
+                fetcher.lifecycle.store,  # type: ignore[attr-defined]
+                cache_root=base_cache_dir,
+                include_etf=True,
+                default_mic="XNAS",
+                default_currency="USD",
+                grace_days=1.0,
+            ),
+            max_age=timedelta(days=0),
+            allow_network=True,
+        )
+        checker.refresher.refresh("yfinance", allow_network=True)
 
     if args.describe:
         desc = fetcher.describe()
