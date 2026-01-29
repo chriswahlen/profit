@@ -187,6 +187,39 @@ class ColumnarSqliteStore:
             sentinel_f64_bits=sentinel_bits,
         )
 
+    def drop_series(self, series_id: int) -> None:
+        """
+        Remove a series definition and all its slices.
+
+        Idempotent: dropping a missing series is a no-op.
+        """
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM __col_slice__ WHERE series_id = ?", (int(series_id),))
+        cur.execute("DELETE FROM __col_series__ WHERE series_id = ?", (int(series_id),))
+        self._conn.commit()
+
+    # Maintenance ------------------------------------------------------
+    def checkpoint(self, mode: str = "PASSIVE") -> tuple[int, int, int]:
+        """
+        Run a WAL checkpoint and return SQLite's (busy, log, checkpointed) tuple.
+
+        Mode is one of PASSIVE|FULL|RESTART|TRUNCATE (case-insensitive).
+        """
+        cur = self._conn.cursor()
+        cur.execute(f"PRAGMA wal_checkpoint({mode})")
+        row = cur.fetchone()
+        return (int(row[0]), int(row[1]), int(row[2]))  # type: ignore[index]
+
+    def optimize(self) -> None:
+        """Run SQLite PRAGMA optimize for opportunistic maintenance."""
+        self._conn.execute("PRAGMA optimize")
+        self._conn.commit()
+
+    def vacuum(self) -> None:
+        """Run a VACUUM to reclaim space; requires no open write transactions."""
+        self._conn.execute("VACUUM")
+        self._conn.commit()
+
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
         cfg = self.get_series(series_id)

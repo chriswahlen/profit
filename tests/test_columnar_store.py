@@ -6,7 +6,7 @@ import pytest
 import sqlite3
 
 import profit.cache.columnar_store as colmod
-from profit.cache import ColumnarSqliteStore, SliceCorruptionError
+from profit.cache import ColumnarSqliteStore, SliceCorruptionError, SeriesNotFoundError
 
 
 DAY_US = 86_400_000_000
@@ -811,6 +811,33 @@ def test_include_sentinel_true_with_nan(tmp_path):
     store.write(sid, [(_dt(1970, 1, 1), float("nan"))])
     pts = store.read_points(sid, start=_dt(1970, 1, 1), end=_dt(1970, 1, 1), include_sentinel=True)
     assert math.isnan(pts[0][1])
+
+
+def test_checkpoint_optimize_vacuum(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    store = ColumnarSqliteStore(db_path)
+    # Should succeed even on empty DB.
+    chk = store.checkpoint()
+    assert len(chk) == 3
+    store.optimize()
+    store.vacuum()
+
+
+def test_drop_series_removes_slices(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    store.write(sid, [(_dt(1970, 1, 1), 1.0)])
+    store.drop_series(sid)
+
+    with pytest.raises(SeriesNotFoundError):
+        store.read_slice_values(sid, 0)
 
 
 def test_corrupt_offsets_checksum(tmp_path):

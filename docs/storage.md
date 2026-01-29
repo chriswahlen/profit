@@ -27,6 +27,7 @@ Key ideas:
 - A **slice** is one canonical window for that series (fixed `window_points` length).
 - Writes are provided as **timestamp/value pairs**; the store reads the impacted slices, overlays updates, and rewrites canonical slices with `INSERT OR REPLACE`.
 - There are no NULLs inside arrays; missing points are represented by a **sentinel** (recommended: NaN).
+- Maintenance: the store opens SQLite in WAL mode (`journal_mode=WAL`, `synchronous=NORMAL`) and exposes `checkpoint()`, `optimize()`, and `vacuum()` helpers for periodic cleanup.
 
 ### Storage layout
 - Default path: `.cache/profit/columnar.sqlite3` (or `$PROFIT_CACHE_DIR/columnar.sqlite3`).
