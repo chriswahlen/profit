@@ -70,6 +70,13 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if start > end:
             raise ValueError("start must be <= end")
 
+        # Auto-coverage: let fetcher supply an adapter when not provided.
+        if coverage is None and hasattr(self, "coverage_adapter"):
+            try:
+                coverage = getattr(self, "coverage_adapter")(request)  # type: ignore[call-arg]
+            except Exception:
+                coverage = None
+
         # Coverage-aware path
         if coverage is not None:
             gaps = coverage.get_unfetched_ranges(start, end)

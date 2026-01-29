@@ -89,10 +89,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     pair = f"{req.base_ccy}/{req.quote_ccy}"
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
     fetcher = YFinanceFxDailyFetcher(cache=cache, store=store)
-    coverage = fetcher.coverage_adapter(req)
 
     print(f"Ensuring coverage for FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
-    fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    fetcher.timeseries_fetch(req, start, end)
 
     if args.read_back:
         series_id = store.get_series_id(

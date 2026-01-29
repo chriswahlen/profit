@@ -118,10 +118,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
     fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store)
-    coverage = fetcher.coverage_adapter(request)
 
     print(f"Ensuring coverage for {args.ticker} {start.date()} → {end.date()} via yfinance...")
-    fetcher.timeseries_fetch(request, start, end, coverage=coverage)
+    fetcher.timeseries_fetch(request, start, end)
 
     for field in args.read_fields:
         _print_points(store, dataset, request.instrument_id, field, start, end)
