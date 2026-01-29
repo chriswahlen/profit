@@ -123,6 +123,19 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
                 except Exception:
                     continue
 
+        bid_val = None
+        ask_val = None
+        if isinstance(data, dict):
+            for key, dest in (("bid", "bid"), ("ask", "ask")):
+                if key in data:
+                    try:
+                        if dest == "bid":
+                            bid_val = float(data[key])
+                        else:
+                            ask_val = float(data[key])
+                    except Exception:
+                        continue
+
         if price_val is None:
             logger.warning("goldapi unexpected payload symbol=%s keys=%s", symbol, list(data.keys())[:5] if isinstance(data, dict) else type(data))
             return None
@@ -133,6 +146,8 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
             instrument_id=request.instrument_id,
             ts_utc=ts,
             price=price_val,
+            bid=bid_val,
+            ask=ask_val,
             currency="USD",
             source=self.source,
             version=self.version,

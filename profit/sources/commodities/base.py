@@ -37,6 +37,8 @@ class CommodityDailyPrice:
     instrument_id: str
     ts_utc: datetime
     price: float
+    bid: float | None
+    ask: float | None
     currency: str
     source: str
     version: str

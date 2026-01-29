@@ -65,7 +65,7 @@ class ColumnarCommodityWriter:
         version = next(iter(versions))
 
         dataset = self.cfg.dataset_name(source=source, version=version)
-        series_id = self.store.get_or_create_series(
+        series_id_price = self.store.get_or_create_series(
             instrument_id=instrument_id,
             dataset=dataset,
             field="price",
@@ -78,15 +78,49 @@ class ColumnarCommodityWriter:
             sentinel_f64=self.cfg.sentinel_f64,
         )
 
-        points = [( _to_utc(p.ts_utc), float(p.price)) for p in rows]
-        self.store.write(series_id, points)
+        series_id_bid = self.store.get_or_create_series(
+            instrument_id=instrument_id,
+            dataset=dataset,
+            field="bid",
+            step_us=self.cfg.step_us,
+            grid_origin_ts_us=self.cfg.grid_origin_ts_us,
+            window_points=self.cfg.window_points,
+            compression=self.cfg.compression,
+            offsets_enabled=self.cfg.offsets_enabled,
+            checksum_enabled=self.cfg.checksum_enabled,
+            sentinel_f64=self.cfg.sentinel_f64,
+        )
+
+        series_id_ask = self.store.get_or_create_series(
+            instrument_id=instrument_id,
+            dataset=dataset,
+            field="ask",
+            step_us=self.cfg.step_us,
+            grid_origin_ts_us=self.cfg.grid_origin_ts_us,
+            window_points=self.cfg.window_points,
+            compression=self.cfg.compression,
+            offsets_enabled=self.cfg.offsets_enabled,
+            checksum_enabled=self.cfg.checksum_enabled,
+            sentinel_f64=self.cfg.sentinel_f64,
+        )
+
+        points_price = [( _to_utc(p.ts_utc), float(p.price)) for p in rows]
+        points_bid = [( _to_utc(p.ts_utc), float(p.bid)) for p in rows if p.bid is not None]
+        points_ask = [( _to_utc(p.ts_utc), float(p.ask)) for p in rows if p.ask is not None]
+
+        self.store.write(series_id_price, points_price)
+        if points_bid:
+            self.store.write(series_id_bid, points_bid)
+        if points_ask:
+            self.store.write(series_id_ask, points_ask)
 
         if coverage_start and coverage_end:
-            self.store.mark_range_fetched(
-                series_id,
-                start=coverage_start,
-                end=coverage_end,
-                missing_value=self.cfg.sentinel_f64,
-            )
+            for sid in (series_id_price, series_id_bid, series_id_ask):
+                self.store.mark_range_fetched(
+                    sid,
+                    start=coverage_start,
+                    end=coverage_end,
+                    missing_value=self.cfg.sentinel_f64,
+                )
 
-        return len(points)
+        return len(points_price)
