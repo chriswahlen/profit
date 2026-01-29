@@ -24,16 +24,23 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
 
     def __init__(
         self,
-        *args,
+        *,
+        store,
         source: str = "yfinance",
         version: str = "v1",
         clock: Callable[[], datetime] | None = None,
+        max_window_days: int | None = 30,
         **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
+        from profit.sources.equities.coverage_adapter import EquitiesCoverageAdapter
+
         self.source = source
         self.version = version
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.max_window_days = max_window_days
+        self._coverage_store = store
+        self._coverage_adapter_cls = EquitiesCoverageAdapter
 
     def _fetch_timeseries_chunk(
         self, request: EquityDailyBarsRequest, start: datetime, end: datetime
@@ -139,3 +146,11 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
                 )
             )
         return out
+
+    def coverage_adapter(self, request: EquityDailyBarsRequest):
+        return self._coverage_adapter_cls(
+            self._coverage_store,
+            instrument_id=request.instrument_id,
+            source=self.source,
+            version=self.version,
+        )

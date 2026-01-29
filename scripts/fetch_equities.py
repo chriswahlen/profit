@@ -17,7 +17,6 @@ from profit.sources.equities import (
     EquityDailyBarsRequest,
     YFinanceDailyBarsFetcher,
 )
-from profit.sources.equities.coverage_adapter import EquitiesCoverageAdapter
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -141,13 +140,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
-    coverage = EquitiesCoverageAdapter(
-        store,
-        instrument_id=request.instrument_id,
-        source="yfinance",
-        version="v1",
-    )
-    fetcher = YFinanceDailyBarsFetcher(cache=cache, max_window_days=30)
+    fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store)
+    coverage = fetcher.coverage_adapter(request)
 
     print(f"Ensuring coverage for {args.ticker} {start.date()} → {end.date()} via yfinance...")
     fetcher.timeseries_fetch(request, start, end, coverage=coverage)

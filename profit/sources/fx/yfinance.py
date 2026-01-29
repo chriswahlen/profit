@@ -19,16 +19,23 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
 
     def __init__(
         self,
-        *args,
+        *,
+        store,
         source: str = "yfinance",
         version: str = "v1",
         clock: Callable[[], datetime] | None = None,
+        max_window_days: int | None = 30,
         **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
+        from profit.sources.fx.coverage_adapter import FxCoverageAdapter
+
         self.source = source
         self.version = version
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.max_window_days = max_window_days
+        self._coverage_store = store
+        self._coverage_adapter_cls = FxCoverageAdapter
 
     def _fetch_timeseries_chunk(self, request: FxRequest, start: datetime, end: datetime) -> list[FxRatePoint]:
         if request.provider != self.source:
@@ -96,3 +103,10 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
             )
         return out
 
+    def coverage_adapter(self, request: FxRequest):
+        return self._coverage_adapter_cls(
+            self._coverage_store,
+            pair=f"{request.base_ccy}/{request.quote_ccy}",
+            source=self.source,
+            version=self.version,
+        )

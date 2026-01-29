@@ -16,7 +16,6 @@ from profit.sources.fx import (
     FxRequest,
     YFinanceFxDailyFetcher,
 )
-from profit.sources.fx.coverage_adapter import FxCoverageAdapter
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -112,13 +111,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     pair = f"{req.base_ccy}/{req.quote_ccy}"
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
-    coverage = FxCoverageAdapter(
-        store,
-        pair=pair,
-        source="yfinance",
-        version="v1",
-    )
-    fetcher = YFinanceFxDailyFetcher(cache=cache, max_window_days=30)
+    fetcher = YFinanceFxDailyFetcher(cache=cache, store=store)
+    coverage = fetcher.coverage_adapter(req)
 
     print(f"Ensuring coverage for FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
     fetcher.timeseries_fetch(req, start, end, coverage=coverage)
