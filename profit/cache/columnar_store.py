@@ -41,6 +41,13 @@ def _default_db_path() -> Path:
     return _default_cache_dir() / "columnar.sqlite3"
 
 
+def _default_unfetched_bits(sentinel_bits: int) -> int:
+    alt = 0x7FF8000000000001  # quiet NaN with payload
+    if sentinel_bits != alt:
+        return alt
+    return 0x7FF8000000000002
+
+
 def _to_utc(ts: datetime) -> datetime:
     if ts.tzinfo is None:
         return ts.replace(tzinfo=timezone.utc)
@@ -70,6 +77,8 @@ class SeriesConfig:
     checksum_enabled: bool
     sentinel_f64: float  # decoded from sentinel_f64_bits; NaN is supported
     sentinel_f64_bits: int
+    sentinel_unfetched_f64: float
+    sentinel_unfetched_f64_bits: int
 
 
 class ColumnarSqliteStore:
@@ -112,6 +121,7 @@ class ColumnarSqliteStore:
         offsets_enabled: bool = False,
         checksum_enabled: bool = True,
         sentinel_f64: float = float("nan"),
+        sentinel_unfetched_f64: float | None = None,
     ) -> int:
         if step_us <= 0:
             raise ValueError("step_us must be > 0")
@@ -121,6 +131,11 @@ class ColumnarSqliteStore:
             raise ValueError("compression must be 'none' or 'zlib'")
 
         sentinel_bits = _f64_to_u64(sentinel_f64)
+        if sentinel_unfetched_f64 is None:
+            sentinel_unfetched_bits = _default_unfetched_bits(sentinel_bits)
+            sentinel_unfetched_f64 = _u64_to_f64(sentinel_unfetched_bits)
+        else:
+            sentinel_unfetched_bits = _f64_to_u64(sentinel_unfetched_f64)
         logger.info(
             "create_series instrument_id=%s dataset=%s field=%s step_us=%s window_points=%s compression=%s offsets=%s checksum=%s",
             instrument_id,
@@ -145,9 +160,10 @@ class ColumnarSqliteStore:
                 compression,
                 offsets_enabled,
                 checksum_enabled,
-                sentinel_f64_bits
+                sentinel_f64_bits,
+                sentinel_unfetched_f64_bits
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 instrument_id,
@@ -160,6 +176,7 @@ class ColumnarSqliteStore:
                 1 if offsets_enabled else 0,
                 1 if checksum_enabled else 0,
                 int(sentinel_bits),
+                int(sentinel_unfetched_bits),
             ),
         )
         self._conn.commit()
@@ -180,7 +197,8 @@ class ColumnarSqliteStore:
                 compression,
                 offsets_enabled,
                 checksum_enabled,
-                sentinel_f64_bits
+                sentinel_f64_bits,
+                sentinel_unfetched_f64_bits
             FROM __col_series__
             WHERE series_id = ?
             """,
@@ -190,7 +208,11 @@ class ColumnarSqliteStore:
         if row is None:
             raise SeriesNotFoundError(series_id)
         sentinel_bits = int(row[10])
+        sentinel_unfetched_bits = int(row[11]) if len(row) > 11 else 0
+        if sentinel_unfetched_bits == 0 or sentinel_unfetched_bits == sentinel_bits:
+            sentinel_unfetched_bits = _default_unfetched_bits(sentinel_bits)
         sentinel_f64 = _u64_to_f64(sentinel_bits)
+        sentinel_unfetched_f64 = _u64_to_f64(sentinel_unfetched_bits)
         return SeriesConfig(
             series_id=int(row[0]),
             instrument_id=str(row[1]),
@@ -204,6 +226,8 @@ class ColumnarSqliteStore:
             checksum_enabled=bool(row[9]),
             sentinel_f64=float(sentinel_f64),
             sentinel_f64_bits=sentinel_bits,
+            sentinel_unfetched_f64=float(sentinel_unfetched_f64),
+            sentinel_unfetched_f64_bits=sentinel_unfetched_bits,
         )
 
     def drop_series(self, series_id: int) -> None:
@@ -414,7 +438,9 @@ class ColumnarSqliteStore:
                 if cfg.offsets_enabled:
                     ts_us = nominal_ts_us + int(offsets[i]) * 1000
                 value = float(values[i])
-                if not include_sentinel and _is_sentinel(value, cfg.sentinel_f64):
+                if not include_sentinel and (
+                    _is_sentinel(value, cfg.sentinel_f64_bits) or _is_unfetched(value, cfg)
+                ):
                     continue
                 out.append((_us_to_dt(ts_us), value))
             slice_start += cfg.window_points
@@ -426,6 +452,76 @@ class ColumnarSqliteStore:
             len(out),
         )
         return out
+
+    def mark_range_fetched(
+        self,
+        series_id: int,
+        *,
+        start: datetime,
+        end: datetime,
+        missing_value: float | None = None,
+    ) -> None:
+        """
+        Mark all unfetched points in [start, end] as fetched-but-missing by writing
+        `missing_value` (defaults to the series sentinel).
+        """
+        cfg = self.get_series(series_id)
+        miss = cfg.sentinel_f64 if missing_value is None else missing_value
+        start_us = _dt_to_us(start)
+        end_us = _dt_to_us(end)
+        if start_us > end_us:
+            raise ValueError("start must be <= end")
+        if start_us < cfg.grid_origin_ts_us or end_us < cfg.grid_origin_ts_us:
+            raise ValueError("timestamp is before grid origin")
+
+        start_idx = (start_us - cfg.grid_origin_ts_us) // cfg.step_us
+        end_idx = (end_us - cfg.grid_origin_ts_us) // cfg.step_us
+        start_slice = (start_idx // cfg.window_points) * cfg.window_points
+        end_slice = (end_idx // cfg.window_points) * cfg.window_points
+
+        slice_start = int(start_slice)
+        while slice_start <= int(end_slice):
+            values, offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            changed = False
+            for pos in range(cfg.window_points):
+                idx = slice_start + pos
+                if idx < int(start_idx) or idx > int(end_idx):
+                    continue
+                if _is_unfetched(values[pos], cfg):
+                    values[pos] = miss
+                    changed = True
+            if changed:
+                self._store_slice(cfg, slice_start, values, offsets)
+            slice_start += cfg.window_points
+
+    def is_range_complete(self, series_id: int, *, start: datetime, end: datetime) -> bool:
+        """
+        Return True if every point in [start, end] has been fetched (i.e., no unfetched sentinel).
+        """
+        cfg = self.get_series(series_id)
+        start_us = _dt_to_us(start)
+        end_us = _dt_to_us(end)
+        if start_us < cfg.grid_origin_ts_us or end_us < cfg.grid_origin_ts_us:
+            return False
+        if start_us > end_us:
+            return False
+
+        start_idx = (start_us - cfg.grid_origin_ts_us) // cfg.step_us
+        end_idx = (end_us - cfg.grid_origin_ts_us) // cfg.step_us
+        start_slice = (start_idx // cfg.window_points) * cfg.window_points
+        end_slice = (end_idx // cfg.window_points) * cfg.window_points
+
+        slice_start = int(start_slice)
+        while slice_start <= int(end_slice):
+            values, _offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            for pos in range(cfg.window_points):
+                idx = slice_start + pos
+                if idx < int(start_idx) or idx > int(end_idx):
+                    continue
+                if _is_unfetched(values[pos], cfg):
+                    return False
+            slice_start += cfg.window_points
+        return True
 
     # Internals --------------------------------------------------------
     def _init_schema(self) -> None:
@@ -444,10 +540,16 @@ class ColumnarSqliteStore:
                 offsets_enabled INTEGER NOT NULL,
                 checksum_enabled INTEGER NOT NULL,
                 sentinel_f64_bits INTEGER NOT NULL,
+                sentinel_unfetched_f64_bits INTEGER NOT NULL,
                 UNIQUE (instrument_id, dataset, field, step_us)
             )
             """
         )
+        cur.execute("PRAGMA table_info(__col_series__)")
+        series_cols = {row[1] for row in cur.fetchall()}
+        if "sentinel_unfetched_f64_bits" not in series_cols:
+            cur.execute("ALTER TABLE __col_series__ ADD COLUMN sentinel_unfetched_f64_bits INTEGER NOT NULL DEFAULT 0")
+            cur.execute("UPDATE __col_series__ SET sentinel_unfetched_f64_bits = sentinel_f64_bits")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS __col_slice__ (
@@ -456,10 +558,16 @@ class ColumnarSqliteStore:
                 values_blob BLOB NOT NULL,
                 offsets_blob BLOB NOT NULL,
                 checksum_blob BLOB NOT NULL,
+                completeness INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (series_id, start_index)
             )
             """
         )
+        # Backfill completeness column for existing installs.
+        cur.execute("PRAGMA table_info(__col_slice__)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "completeness" not in cols:
+            cur.execute("ALTER TABLE __col_slice__ ADD COLUMN completeness INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
 
     def _load_or_init_slice(
@@ -485,7 +593,7 @@ class ColumnarSqliteStore:
         if row is None:
             if require_existing:
                 raise KeyError((cfg.series_id, slice_start_index))
-            values = _init_values(cfg.window_points, cfg.sentinel_f64)
+            values = _init_values(cfg.window_points, cfg.sentinel_unfetched_f64)
             offsets = _init_offsets(cfg.window_points)
             return values, offsets
 
@@ -521,12 +629,13 @@ class ColumnarSqliteStore:
         checksum = _slice_checksum(values_bytes, offsets_bytes) if cfg.checksum_enabled else b""
         values_blob = _compress_if_needed(values_bytes, cfg.compression)
         offsets_blob = _compress_if_needed(offsets_bytes, cfg.compression) if cfg.offsets_enabled else b""
+        completeness = 0 if any(_is_unfetched(v, cfg) for v in values) else 1
 
         cur = self._conn.cursor()
         cur.execute(
             """
-            INSERT OR REPLACE INTO __col_slice__ (series_id, start_index, values_blob, offsets_blob, checksum_blob)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO __col_slice__ (series_id, start_index, values_blob, offsets_blob, checksum_blob, completeness)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 int(cfg.series_id),
@@ -534,15 +643,22 @@ class ColumnarSqliteStore:
                 sqlite3.Binary(values_blob),
                 sqlite3.Binary(offsets_blob),
                 sqlite3.Binary(checksum),
+                int(completeness),
             ),
         )
         self._conn.commit()
 
 
-def _is_sentinel(value: float, sentinel: float) -> bool:
-    if math.isnan(sentinel):
-        return math.isnan(value)
-    return value == sentinel
+def _is_bitmatch(value: float, bits: int) -> bool:
+    return _f64_to_u64(value) == bits
+
+
+def _is_sentinel(value: float, sentinel_bits: int) -> bool:
+    return _is_bitmatch(value, sentinel_bits)
+
+
+def _is_unfetched(value: float, cfg: SeriesConfig) -> bool:
+    return _is_bitmatch(value, cfg.sentinel_unfetched_f64_bits)
 
 
 def _init_values(n: int, sentinel: float) -> array:

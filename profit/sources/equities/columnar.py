@@ -47,7 +47,13 @@ class ColumnarOhlcvWriter:
         self.store = store
         self.cfg = cfg or ColumnarOhlcvConfig()
 
-    def write_daily_bars(self, bars: Iterable[EquityDailyBar]) -> dict[str, int]:
+    def write_daily_bars(
+        self,
+        bars: Iterable[EquityDailyBar],
+        *,
+        coverage_start: datetime | None = None,
+        coverage_end: datetime | None = None,
+    ) -> dict[str, int]:
         """
         Write all fields for the given bars.
 
@@ -110,6 +116,10 @@ class ColumnarOhlcvWriter:
             points_by_field["low_adj"].append((ts, float(bar.low_adj)))
             points_by_field["close_adj"].append((ts, float(bar.close_adj)))
             points_by_field["volume_adj"].append((ts, float(bar.volume_adj)))
+
+        if coverage_start and coverage_end:
+            for series_id in series_ids.values():
+                self.store.mark_range_fetched(series_id, start=coverage_start, end=coverage_end, missing_value=self.cfg.sentinel_f64)
 
         counts: dict[str, int] = {}
         for field, series_id in series_ids.items():

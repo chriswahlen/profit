@@ -98,31 +98,45 @@ def main() -> None:
     os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
     yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
-    fetcher = YFinanceFxDailyFetcher(cache=cache, max_window_days=30)
-
     req = FxRequest(
         base_ccy=args.base.upper(),
         quote_ccy=args.quote.upper(),
         provider="yfinance",
         provider_code=provider_code,
     )
+
+    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
+    store = ColumnarSqliteStore(store_path)
+    cfg = ColumnarFxConfig()
+    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    pair = f"{req.base_ccy}/{req.quote_ccy}"
+    series_id = store.get_series_id(
+        instrument_id=pair,
+        dataset=dataset,
+        field="rate",
+        step_us=cfg.step_us,
+    )
+    if series_id is not None and store.is_range_complete(series_id, start=start, end=end):
+        print("Range already complete in columnar store; skipping fetch.")
+        pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
+        print(f"Read back {len(pts)} points:")
+        for ts, rate in pts:
+            print(f"  {ts.date().isoformat()} rate={rate}")
+        return
+
+    cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
+    fetcher = YFinanceFxDailyFetcher(cache=cache, max_window_days=30)
     print(f"Fetching FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
     rates = fetcher.timeseries_fetch(req, start, end)
     if not rates:
         print("Provider returned no rates.")
         return
 
-    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
-    store = ColumnarSqliteStore(store_path)
     writer = ColumnarFxWriter(store, cfg=ColumnarFxConfig())
-    inserted = writer.write_rates(rates)
+    inserted = writer.write_rates(rates, coverage_start=start, coverage_end=end)
     print(f"Wrote {inserted} FX points to {store_path}")
 
     if args.read_back:
-        cfg = ColumnarFxConfig()
-        dataset = cfg.dataset_name(source=rates[0].source, version=rates[0].version)
-        pair = f"{req.base_ccy}/{req.quote_ccy}"
         series_id = store.get_series_id(
             instrument_id=pair,
             dataset=dataset,

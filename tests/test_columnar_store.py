@@ -850,6 +850,118 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     assert sid == existing
 
 
+def test_mark_range_fetched_and_completeness(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 4)
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+
+def test_unfetched_vs_fetched_empty_range(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 4)
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+    pts_no_sentinel = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert pts_no_sentinel == []
+
+    pts_with_sentinel = store.read_points(sid, start=start, end=end, include_sentinel=True)
+    assert len(pts_with_sentinel) == 4
+    # All should now be data sentinel (not unfetched marker), so treated as fetched-but-missing.
+    assert all(math.isnan(v) for _, v in pts_with_sentinel)
+
+
+def test_mixed_slice_unfetched_and_written(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+        sentinel_f64=float("nan"),
+    )
+    store.write(sid, [(_dt(1970, 1, 1), 1.0)])  # only first point
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 4)
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+    pts = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert len(pts) == 1
+    assert pts[0] == (_dt(1970, 1, 1), 1.0)
+
+    pts_all = store.read_points(sid, start=start, end=end, include_sentinel=True)
+    assert len(pts_all) == 4
+    assert pts_all[0][1] == 1.0
+    assert all(math.isnan(v) for _, v in pts_all[1:])
+
+
+def test_partial_slices_and_unrelated_slices(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=3,
+        sentinel_f64=float("nan"),
+    )
+    # Write indices 0,1 and 3,4 (leaving 2 and 5 unfetched).
+    store.write(
+        sid,
+        [
+            (_dt(1970, 1, 1), 10.0),
+            (_dt(1970, 1, 2), 11.0),
+            (_dt(1970, 1, 4), 20.0),
+            (_dt(1970, 1, 5), 21.0),
+        ],
+    )
+    start = _dt(1970, 1, 1)
+    end = _dt(1970, 1, 6)
+    assert store.is_range_complete(sid, start=start, end=end) is False
+
+    store.mark_range_fetched(sid, start=start, end=end)
+    assert store.is_range_complete(sid, start=start, end=end) is True
+
+    pts = store.read_points(sid, start=start, end=end, include_sentinel=False)
+    assert [p[1] for p in pts] == [10.0, 11.0, 20.0, 21.0]
+
+    # A slice beyond the covered range remains unfetched.
+    far = store.is_range_complete(sid, start=_dt(1970, 1, 7), end=_dt(1970, 1, 7))
+    assert far is False
+
+
 def test_checkpoint_optimize_vacuum(tmp_path):
     db_path = tmp_path / "col.sqlite3"
     store = ColumnarSqliteStore(db_path)

@@ -43,7 +43,13 @@ class ColumnarFxWriter:
         self.store = store
         self.cfg = cfg or ColumnarFxConfig()
 
-    def write_rates(self, points: Iterable[FxRatePoint]) -> int:
+    def write_rates(
+        self,
+        points: Iterable[FxRatePoint],
+        *,
+        coverage_start: datetime | None = None,
+        coverage_end: datetime | None = None,
+    ) -> int:
         rows = list(points)
         if not rows:
             return 0
@@ -74,6 +80,14 @@ class ColumnarFxWriter:
             sentinel_f64=self.cfg.sentinel_f64,
         )
 
-        pts = [( _to_utc(p.ts_utc), float(p.rate)) for p in rows]
+        if coverage_start and coverage_end:
+            self.store.mark_range_fetched(
+                series_id,
+                start=coverage_start,
+                end=coverage_end,
+                missing_value=self.cfg.sentinel_f64,
+            )
+
+        pts = [(_to_utc(p.ts_utc), float(p.rate)) for p in rows]
         self.store.write(series_id, pts)
         return len(pts)

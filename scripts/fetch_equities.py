@@ -135,6 +135,23 @@ def main() -> None:
     os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
     yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
+    store = ColumnarSqliteStore(db_path=store_path)
+    cfg = ColumnarOhlcvConfig()
+    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    close_series = store.get_series_id(
+        instrument_id=request.instrument_id,
+        dataset=dataset,
+        field="close_raw",
+        step_us=DAY_US,
+    )
+
+    if close_series is not None and store.is_range_complete(close_series, start=start, end=end):
+        print("Range already complete in columnar store; skipping fetch.")
+        for field in args.read_fields:
+            _print_points(store, dataset, request.instrument_id, field, start, end)
+        return
+
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
     fetcher = YFinanceDailyBarsFetcher(cache=cache, max_window_days=30)
     print(f"Fetching {args.ticker} bars {start.date()} → {end.date()} via yfinance...")
@@ -144,15 +161,12 @@ def main() -> None:
         print("Provider returned no bars.")
         return
 
-    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
-    store = ColumnarSqliteStore(db_path=store_path)
     writer = ColumnarOhlcvWriter(store)
-    counts = writer.write_daily_bars(bars)
+    counts = writer.write_daily_bars(bars, coverage_start=start, coverage_end=end)
     print("Written fields:")
     for field, count in counts.items():
         print(f"  {field}: {count} points")
 
-    cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source=bars[0].source, version=bars[0].version)
     for field in args.read_fields:
         _print_points(store, dataset, request.instrument_id, field, start, end)
