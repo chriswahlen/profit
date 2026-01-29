@@ -198,6 +198,83 @@ class ColumnarSqliteStore:
         cur.execute("DELETE FROM __col_series__ WHERE series_id = ?", (int(series_id),))
         self._conn.commit()
 
+    def get_series_id(
+        self,
+        *,
+        instrument_id: str,
+        dataset: str,
+        field: str,
+        step_us: int,
+    ) -> int | None:
+        """
+        Look up a series_id by its natural unique key.
+
+        Returns None when missing.
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT series_id
+            FROM __col_series__
+            WHERE instrument_id = ? AND dataset = ? AND field = ? AND step_us = ?
+            """,
+            (instrument_id, dataset, field, int(step_us)),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return int(row[0])
+
+    def get_or_create_series(
+        self,
+        *,
+        instrument_id: str,
+        dataset: str,
+        field: str,
+        step_us: int,
+        grid_origin_ts_us: int,
+        window_points: int,
+        compression: str = "none",
+        offsets_enabled: bool = False,
+        checksum_enabled: bool = True,
+        sentinel_f64: float = float("nan"),
+    ) -> int:
+        """
+        Create a series if needed, otherwise return the existing series_id.
+        """
+        existing = self.get_series_id(
+            instrument_id=instrument_id,
+            dataset=dataset,
+            field=field,
+            step_us=step_us,
+        )
+        if existing is not None:
+            return existing
+        try:
+            return self.create_series(
+                instrument_id=instrument_id,
+                dataset=dataset,
+                field=field,
+                step_us=step_us,
+                grid_origin_ts_us=grid_origin_ts_us,
+                window_points=window_points,
+                compression=compression,
+                offsets_enabled=offsets_enabled,
+                checksum_enabled=checksum_enabled,
+                sentinel_f64=sentinel_f64,
+            )
+        except sqlite3.IntegrityError:
+            # Concurrent process or race: re-read.
+            existing2 = self.get_series_id(
+                instrument_id=instrument_id,
+                dataset=dataset,
+                field=field,
+                step_us=step_us,
+            )
+            if existing2 is None:
+                raise
+            return existing2
+
     # Maintenance ------------------------------------------------------
     def checkpoint(self, mode: str = "PASSIVE") -> tuple[int, int, int]:
         """

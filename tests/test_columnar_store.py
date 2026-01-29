@@ -813,6 +813,43 @@ def test_include_sentinel_true_with_nan(tmp_path):
     assert math.isnan(pts[0][1])
 
 
+def test_get_series_id_missing_returns_none(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    series_id = store.get_series_id(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+    )
+    assert series_id is None
+
+
+def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    existing = store.create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+
+    def _fail(*args, **kwargs):
+        raise sqlite3.IntegrityError("race")
+
+    monkeypatch.setattr(store, "create_series", _fail)
+    sid = store.get_or_create_series(
+        instrument_id="MSFT",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    assert sid == existing
+
+
 def test_checkpoint_optimize_vacuum(tmp_path):
     db_path = tmp_path / "col.sqlite3"
     store = ColumnarSqliteStore(db_path)
