@@ -16,3 +16,10 @@ python scripts/fetch_fx.py --base EUR --quote USD --start 2025-01-01 --end 2025-
 ```
 
 `scripts/fetch_commodities.py` fetches daily commodity prices (gold/silver) into `ColumnarSqliteStore` under dataset `commodity_price:{source}:{version}`. Supported provider: `goldapi` (`GOLDAPI_API_KEY`).
+
+### Catalog helpers
+
+- Query catalog: `python scripts/catalog.py --query AAPL --provider yfinance --limit 5`
+- Load yfinance equities from a CSV symbol list: `python scripts/catalog_load.py yfinance-equities --csv symbols.csv --ticker-col Symbol --default-mic XNAS`
+- Load FX pairs (defaults to major pairs): `python scripts/catalog_load.py yfinance-fx --pairs EURUSD,GBPUSD`
+- Seed goldapi instruments: `python scripts/catalog_load.py goldapi`
