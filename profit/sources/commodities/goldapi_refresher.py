@@ -22,6 +22,7 @@ class GoldApiRefresher(CatalogRefresher):
         if provider != "goldapi":
             raise ValueError("GoldApiRefresher only supports provider='goldapi'")
         seen_at = datetime.now(timezone.utc)
+        active_from = datetime(1900, 1, 1, tzinfo=timezone.utc)
         logger.info("catalog refresh goldapi start")
         rows = [
             InstrumentRecord(
@@ -31,7 +32,7 @@ class GoldApiRefresher(CatalogRefresher):
                 provider_code="XAU",
                 mic=None,
                 currency="USD",
-                active_from=seen_at,
+                active_from=active_from,
                 active_to=None,
                 attrs={"name": "gold"},
             ),
@@ -42,7 +43,7 @@ class GoldApiRefresher(CatalogRefresher):
                 provider_code="XAG",
                 mic=None,
                 currency="USD",
-                active_from=seen_at,
+                active_from=active_from,
                 active_to=None,
                 attrs={"name": "silver"},
             ),
