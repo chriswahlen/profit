@@ -27,6 +27,7 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
         max_attempts: int = 3,
         backoff_factor: float = 0.5,
         max_backoff: float = 5.0,
+        lifecycle=None,
     ) -> None:
         super().__init__(
             cache=cache,
@@ -36,6 +37,7 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
             max_attempts=max_attempts,
             backoff_factor=backoff_factor,
             max_backoff=max_backoff,
+            lifecycle=lifecycle,
         )
 
     def fetch(self, request: RequestT, *, ttl: Optional[timedelta] = None) -> ResultT:

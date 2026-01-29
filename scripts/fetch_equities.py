@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Sequence
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
+from profit.catalog import CatalogStore
+from profit.catalog.lifecycle import CatalogLifecycleReader
+from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args, get_catalog_db_path
 from profit.sources.equities import (
     ColumnarOhlcvConfig,
     ColumnarOhlcvWriter,
@@ -51,7 +53,13 @@ def _build_parser() -> ArgumentParser:
         action="store_true",
         help="Print fetcher capabilities and exit.",
     )
-    add_common_cli_args(parser, cache_help_subdir="fetcher", default_store_filename="columnar.sqlite3")
+    add_common_cli_args(
+        parser,
+        cache_help_subdir="fetcher",
+        default_store_filename="columnar.sqlite3",
+        include_catalog_path=True,
+        default_catalog_filename="catalog.sqlite3",
+    )
     return parser
 
 
@@ -109,8 +117,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     store = ColumnarSqliteStore(db_path=get_columnar_db_path(args=args))
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
+    catalog_path = get_catalog_db_path(args=args)
+    if not catalog_path.exists():
+        parser.error(f"Catalog not found at {catalog_path}; lifecycle metadata required.")
+
+    catalog_store = CatalogStore(catalog_path, readonly=True)
+    lifecycle = CatalogLifecycleReader(catalog_store)
+
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
-    fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store)
+    fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store, lifecycle=lifecycle)
 
     if args.describe:
         desc = fetcher.describe()

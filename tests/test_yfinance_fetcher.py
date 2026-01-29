@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 import pytest
 
 from profit.sources.equities import EquityDailyBarsRequest, YFinanceDailyBarsFetcher
+from profit.sources.types import LifecycleReader
+
+
+class _AlwaysActiveLifecycle(LifecycleReader):
+    def get_lifecycle(self, provider: str, provider_code: str):
+        return datetime(1900, 1, 1, tzinfo=timezone.utc), None
 
 
 @pytest.mark.skipif("pandas" not in globals(), reason="pandas not installed")
@@ -26,7 +32,7 @@ def test_yfinance_fetcher_handles_multiindex(monkeypatch):
 
     monkeypatch.setattr("profit.sources.equities.yfinance.yf", type("YF", (), {"download": fake_download}))
 
-    fetcher = YFinanceDailyBarsFetcher(cache=None, max_window_days=None)
+    fetcher = YFinanceDailyBarsFetcher(cache=None, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
     req = EquityDailyBarsRequest(
         instrument_id="AAPL|XNAS",
         provider="yfinance",

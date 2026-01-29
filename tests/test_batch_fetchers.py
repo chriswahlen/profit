@@ -8,6 +8,12 @@ from profit.sources.base_fetcher import BaseFetcher
 from profit.sources.equities import EquitiesDailyFetcher, EquityDailyBar, EquityDailyBarsRequest, YFinanceDailyBarsFetcher
 from profit.sources.errors import ThrottledError
 from profit.sources.fx import FxRatePoint, FxRequest, YFinanceFxDailyFetcher
+from profit.sources.types import LifecycleReader
+
+
+class _AlwaysActiveLifecycle(LifecycleReader):
+    def get_lifecycle(self, provider: str, provider_code: str):
+        return datetime(1900, 1, 1, tzinfo=timezone.utc), None
 
 
 def _dt(y: int, m: int, d: int) -> datetime:
@@ -16,7 +22,7 @@ def _dt(y: int, m: int, d: int) -> datetime:
 
 class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), **kwargs)
         self.batch_calls: list[list[EquityDailyBarsRequest]] = []
 
     def _fetch_timeseries_chunk_many(self, requests, start, end):
@@ -64,6 +70,8 @@ def test_equities_batch_fetcher_uses_single_batch_call(tmp_path):
 @dataclass(frozen=True)
 class _SimpleRequest:
     key: str
+    provider: str = "test"
+    provider_code: str = "TEST"
 
     def fingerprint(self) -> str:
         return self.key
@@ -71,7 +79,7 @@ class _SimpleRequest:
 
 class _ThrottlingBatchFetcher(BaseFetcher[_SimpleRequest, list[str]]):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), **kwargs)
         self.attempts = 0
         self.sleeps: list[float] = []
 
@@ -112,7 +120,7 @@ def test_timeseries_fetch_many_retries_on_throttle(tmp_path):
 def test_yfinance_equities_chunk_delegates_to_batch(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     cache = FileCache(base_dir=tmp_path / "cache_eq")
-    fetcher = YFinanceDailyBarsFetcher(store=store, cache=cache, max_window_days=None)
+    fetcher = YFinanceDailyBarsFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
 
     called = {}
 
@@ -154,7 +162,7 @@ def test_yfinance_equities_chunk_delegates_to_batch(tmp_path):
 def test_yfinance_fx_chunk_delegates_to_batch(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col_fx.sqlite3")
     cache = FileCache(base_dir=tmp_path / "cache_fx")
-    fetcher = YFinanceFxDailyFetcher(store=store, cache=cache, max_window_days=None)
+    fetcher = YFinanceFxDailyFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
 
     called = {}
 
@@ -183,3 +191,49 @@ def test_yfinance_fx_chunk_delegates_to_batch(tmp_path):
     assert called["reqs"] == [req]
     assert len(pts) == 1
     assert pts[0].rate == 1.23
+
+
+def test_lifecycle_clipping_batches_by_window():
+    # One symbol active full window, one delisted mid-window.
+    class _Req:
+        def __init__(self, instrument_id, provider, provider_code):
+            self.instrument_id = instrument_id
+            self.provider = provider
+            self.provider_code = provider_code
+
+        def fingerprint(self):
+            return f"{self.provider}:{self.provider_code}:{self.instrument_id}"
+
+    class _MapLifecycle(LifecycleReader):
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        def get_lifecycle(self, provider: str, provider_code: str):
+            return self.mapping.get((provider, provider_code))
+
+    calls = []
+
+    class _Fetcher(BaseFetcher[_Req, list[str]]):
+        def _fetch_timeseries_chunk_many(self, requests, start, end):
+            calls.append((start, end, list(requests)))
+            return {req: [] for req in requests}
+
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2020, 1, 30, tzinfo=timezone.utc)
+    lifecycles = {
+        ("p", "FULL"): (datetime(1900, 1, 1, tzinfo=timezone.utc), None),
+        ("p", "CUT"): (datetime(1900, 1, 1, tzinfo=timezone.utc), datetime(2020, 1, 15, tzinfo=timezone.utc)),
+    }
+    fetcher = _Fetcher(cache=None, lifecycle=_MapLifecycle(lifecycles))
+    req_full = _Req("FULL|X", "p", "FULL")
+    req_cut = _Req("CUT|X", "p", "CUT")
+
+    fetcher.timeseries_fetch_many([req_full, req_cut], start, end)
+
+    # Expect two batch calls: one full window (only FULL), one clipped (only CUT).
+    assert len(calls) == 2
+    windows = {(c[0].date(), c[1].date(), len(c[2])) for c in calls}
+    assert windows == {
+        (start.date(), end.date(), 1),
+        (start.date(), datetime(2020, 1, 15, tzinfo=timezone.utc).date(), 1),
+    }

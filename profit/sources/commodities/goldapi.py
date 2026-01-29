@@ -43,9 +43,10 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = None,
         max_batch_size: int | None = 1,
+        lifecycle,
         **kwargs,
     ) -> None:
-        super().__init__(max_window_days=max_window_days, max_batch_size=max_batch_size, **kwargs)
+        super().__init__(max_window_days=max_window_days, max_batch_size=max_batch_size, lifecycle=lifecycle, **kwargs)
         self.source = source
         self.version = version
         self.base_url = base_url.rstrip("/")

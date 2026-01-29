@@ -8,8 +8,8 @@ from typing import Callable, Generic, Iterable, List, Optional, Sequence, Tuple,
 
 from profit.cache import CacheMissError, FileCache, OfflineModeError
 from profit.sources.coverage import CoverageAdapter
-from profit.sources.errors import ThrottledError
-from profit.sources.types import Fingerprintable
+from profit.sources.errors import ThrottledError, InactiveInstrumentError
+from profit.sources.types import Fingerprintable, LifecycleReader
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
 ResultT = TypeVar("ResultT")
@@ -40,6 +40,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         retry_exceptions: Tuple[Type[BaseException], ...] = (Exception,),
         sleep_fn: Callable[[float], None] = time.sleep,
         max_batch_size: Optional[int] = None,
+        lifecycle: LifecycleReader | None = None,
     ) -> None:
         self.cache = cache or FileCache(ttl=ttl)
         self.ttl = ttl
@@ -52,6 +53,9 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         self.retry_exceptions = retry_exceptions
         self._sleep = sleep_fn
         self.max_batch_size = max_batch_size
+        if lifecycle is None:
+            raise ValueError("lifecycle reader is required")
+        self.lifecycle = lifecycle
 
     # Public API ---------------------------------------------------------
     def timeseries_fetch_many(
@@ -80,10 +84,59 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if start > end:
             raise ValueError("start must be <= end")
 
-        # Resolve coverage adapters per request (if provided by caller or subclass).
+        # Lifecycle clipping per request.
+        windows_by_req: dict[RequestT, Tuple[datetime, datetime]] = {}
+        skipped_errors: dict[RequestT, InactiveInstrumentError] = {}
+        for req in requests:
+            provider = getattr(req, "provider", None)
+            provider_code = getattr(req, "provider_code", None)
+            if provider is None or provider_code is None:
+                raise ValueError("Request must expose provider and provider_code for lifecycle enforcement")
+
+            lc = self.lifecycle.get_lifecycle(str(provider), str(provider_code))
+            if lc is None:
+                skipped_errors[req] = InactiveInstrumentError(
+                    str(provider),
+                    str(provider_code),
+                    reason="not_in_catalog",
+                    requested_start=start,
+                    requested_end=end,
+                    active_from=None,
+                    active_to=None,
+                )
+                continue
+            active_from, active_to = lc
+            clip_start = max(start, active_from)
+            clip_end = min(end, active_to or end)
+            if clip_start > clip_end:
+                skipped_errors[req] = InactiveInstrumentError(
+                    str(provider),
+                    str(provider_code),
+                    reason="outside_lifecycle",
+                    requested_start=start,
+                    requested_end=end,
+                    active_from=active_from,
+                    active_to=active_to,
+                )
+                continue
+            windows_by_req[req] = (clip_start, clip_end)
+
+        if not windows_by_req:
+            # All requests inactive.
+            # Raise the first error for clarity.
+            first_err = next(iter(skipped_errors.values()))
+            raise first_err
+
+        if skipped_errors:
+            for err in skipped_errors.values():
+                logger.warning("%s", err)
+
+        active_requests: list[RequestT] = list(windows_by_req.keys())
+
+        # Resolve coverage adapters for active requests.
         coverage_by_req: dict[RequestT, CoverageAdapter | None] = {}
         has_coverage_factory = hasattr(self, "coverage_adapter")
-        for req in requests:
+        for req in active_requests:
             cov: CoverageAdapter | None = None
             if coverage_by_request and req in coverage_by_request:
                 cov = coverage_by_request[req]
@@ -94,14 +147,15 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
                     cov = None
             coverage_by_req[req] = cov
 
-        # Determine unfetched gaps per request.
+        # Determine unfetched gaps per request using clipped windows.
         gaps_by_req: dict[RequestT, Sequence[Tuple[datetime, datetime]]] = {}
-        for req in requests:
+        for req in active_requests:
+            clip_start, clip_end = windows_by_req[req]
             cov = coverage_by_req[req]
             if cov is None:
-                gaps_by_req[req] = [(start, end)]
+                gaps_by_req[req] = [(clip_start, clip_end)]
                 continue
-            gaps = cov.get_unfetched_ranges(start, end)
+            gaps = cov.get_unfetched_ranges(clip_start, clip_end)
             gaps_by_req[req] = gaps
 
         # Build chunk jobs grouped by identical (chunk_start, chunk_end).
@@ -169,8 +223,12 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         out: list[ResultT | List[ResultT]] = []
         for req in requests:
             cov = coverage_by_req.get(req)
+            if req in windows_by_req:
+                clip_start, clip_end = windows_by_req[req]
+            else:
+                clip_start, clip_end = start, end
             if cov:
-                out.append(cov.read_points(start, end))
+                out.append(cov.read_points(clip_start, clip_end))
             else:
                 out.append(self._combine_chunks(chunks_by_req.get(req, [])))
         return out

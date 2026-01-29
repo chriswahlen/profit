@@ -28,9 +28,10 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = 30,
         max_batch_size: int | None = 50,
+        lifecycle,
         **kwargs,
     ) -> None:
-        super().__init__(max_batch_size=max_batch_size, **kwargs)
+        super().__init__(max_batch_size=max_batch_size, lifecycle=lifecycle, **kwargs)
         from profit.sources.fx.coverage_adapter import FxCoverageAdapter
 
         self.source = source

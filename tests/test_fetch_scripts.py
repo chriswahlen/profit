@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from profit.cache import ColumnarSqliteStore
+from profit.catalog import CatalogStore, InstrumentRecord
 from profit.sources.equities import ColumnarOhlcvConfig
 
 
@@ -18,6 +19,23 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
     # Prepare store with complete range.
     db_path = tmp_path / "columnar.sqlite3"
     store = ColumnarSqliteStore(db_path)
+    catalog_path = tmp_path / "catalog.sqlite3"
+    catalog = CatalogStore(catalog_path)
+    catalog.upsert_instruments(
+        [
+            InstrumentRecord(
+                instrument_id="AAPL|XNAS",
+                instrument_type="equity",
+                provider="yfinance",
+                provider_code="AAPL",
+                mic="XNAS",
+                currency="USD",
+                active_from=_dt(2010, 1, 1),
+                active_to=None,
+                attrs={},
+            )
+        ]
+    )
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     sid = store.get_or_create_series(
@@ -33,6 +51,7 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
 
     monkeypatch.setenv("PROFIT_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("PROFIT_CACHE_DIR", str(tmp_path / "cache"))
+    # Catalog path uses PROFIT_DATA_ROOT/catalog.sqlite3 by default.
     calls = {"fetch": 0}
 
     def fake_chunk(self, requests, start, end):

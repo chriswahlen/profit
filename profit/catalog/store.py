@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -76,21 +76,22 @@ class CatalogStore:
         Upsert instrument rows; returns count written.
         """
         now = last_seen or datetime.now(timezone.utc)
-        rows = [
-            (
-                r.instrument_id,
-                r.instrument_type,
-                r.provider,
-                r.provider_code,
-                r.mic,
-                r.currency,
-                _dt_to_str(r.active_from),
-                _dt_to_str(r.active_to) if r.active_to else None,
-                _dt_to_str(now),
-                json.dumps(r.attrs or {}),
+        rows = []
+        for r in records:
+            rows.append(
+                (
+                    r.instrument_id,
+                    r.instrument_type,
+                    r.provider,
+                    r.provider_code,
+                    r.mic,
+                    r.currency,
+                    _dt_to_str(r.active_from),
+                    _dt_to_str(r.active_to) if r.active_to else None,
+                    _dt_to_str(now),
+                    json.dumps(r.attrs or {}),
+                )
             )
-            for r in records
-        ]
         if not rows:
             return 0
         cur = self.conn.cursor()
@@ -106,8 +107,14 @@ class CatalogStore:
                 instrument_type=excluded.instrument_type,
                 mic=excluded.mic,
                 currency=excluded.currency,
-                active_from=excluded.active_from,
-                active_to=excluded.active_to,
+                -- Preserve original active_from; only backfill if missing.
+                active_from=COALESCE(instrument_catalog.active_from, excluded.active_from),
+                -- If symbol reappears, clear tombstone; otherwise keep existing active_to.
+                active_to=CASE
+                    WHEN instrument_catalog.active_to IS NOT NULL AND excluded.active_to IS NULL THEN NULL
+                    WHEN instrument_catalog.active_to IS NULL THEN excluded.active_to
+                    ELSE instrument_catalog.active_to
+                END,
                 last_seen=excluded.last_seen,
                 attrs=excluded.attrs;
             """,
@@ -115,6 +122,30 @@ class CatalogStore:
         )
         self.conn.commit()
         return len(rows)
+
+    def mark_missing_as_inactive(self, *, provider: str, seen_at: datetime, grace: float = 0.0) -> int:
+        """
+        Mark symbols not seen in the latest snapshot as inactive by setting active_to.
+
+        Args:
+            provider: provider code (e.g., yfinance)
+            seen_at: timestamp of the current snapshot
+            grace: grace period in days before tombstoning
+        """
+        cutoff = seen_at - timedelta(days=grace)
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE instrument_catalog
+            SET active_to = ?
+            WHERE provider = ?
+              AND active_to IS NULL
+              AND last_seen < ?
+            """,
+            (_dt_to_str(seen_at), provider, _dt_to_str(cutoff)),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     # --- Reads ---------------------------------------------------------
     def search_instruments(
