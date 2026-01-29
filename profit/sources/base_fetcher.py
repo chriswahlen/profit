@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,8 @@ from profit.sources.types import Fingerprintable
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
 ResultT = TypeVar("ResultT")
+
+logger = logging.getLogger(__name__)
 
 
 class BaseFetcher(Generic[RequestT, ResultT], ABC):
@@ -67,15 +70,23 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
             cache_key = self._fingerprint(request, chunk_start, chunk_end)
             try:
                 entry = self.cache.get(cache_key, ttl=ttl)
+                logger.info("cache hit key=%s", cache_key)
                 chunks.append(entry.value)
                 continue
             except CacheMissError:
+                logger.info("cache miss key=%s", cache_key)
                 if self.offline:
                     raise OfflineModeError(
                         f"Offline mode enabled and cache miss for {cache_key}"
                     )
 
             def _call() -> ResultT:
+                logger.info(
+                    "network request fingerprint=%s start=%s end=%s",
+                    request.fingerprint(),
+                    chunk_start.isoformat(),
+                    chunk_end.isoformat(),
+                )
                 return self._fetch_timeseries_chunk(request, chunk_start, chunk_end)
 
             result = self._with_retries(_call)

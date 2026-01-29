@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import os
 import sqlite3
 import struct
 import sys
@@ -13,6 +15,9 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .file_cache import _default_cache_dir
+from profit.config import ensure_profit_conf_loaded, get_data_root
+
+logger = logging.getLogger(__name__)
 
 
 class ColumnarStoreError(RuntimeError):
@@ -28,8 +33,11 @@ class SliceCorruptionError(ColumnarStoreError):
 
 
 def _default_db_path() -> Path:
-    # Share the same default cache root, but keep a dedicated filename so
-    # callers can delete/inspect columnar storage independently.
+    ensure_profit_conf_loaded()
+    # Prefer data root for persistent series storage; fall back to cache root.
+    data_root = get_data_root()
+    if data_root:
+        return Path(data_root) / "columnar.sqlite3"
     return _default_cache_dir() / "columnar.sqlite3"
 
 
@@ -113,6 +121,17 @@ class ColumnarSqliteStore:
             raise ValueError("compression must be 'none' or 'zlib'")
 
         sentinel_bits = _f64_to_u64(sentinel_f64)
+        logger.info(
+            "create_series instrument_id=%s dataset=%s field=%s step_us=%s window_points=%s compression=%s offsets=%s checksum=%s",
+            instrument_id,
+            dataset,
+            field,
+            step_us,
+            window_points,
+            compression,
+            offsets_enabled,
+            checksum_enabled,
+        )
         cur = self._conn.cursor()
         cur.execute(
             """
@@ -299,11 +318,18 @@ class ColumnarSqliteStore:
 
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
+        pts = list(points)
+        logger.info(
+            "columnar.write series_id=%s points=%s first_ts=%s",
+            series_id,
+            len(pts),
+            pts[0][0].isoformat() if pts else None,
+        )
         cfg = self.get_series(series_id)
         grouped: dict[int, list[tuple[int, float]]] = {}
         grouped_offsets: dict[int, list[tuple[int, int]]] = {}
 
-        for ts, value in points:
+        for ts, value in pts:
             ts_us = _dt_to_us(ts)
             if ts_us < cfg.grid_origin_ts_us:
                 raise ValueError("timestamp is before grid origin")
@@ -346,6 +372,12 @@ class ColumnarSqliteStore:
     def read_slice_values(self, series_id: int, slice_start_index: int) -> list[float]:
         cfg = self.get_series(series_id)
         values, _offsets = self._load_or_init_slice(cfg, slice_start_index, require_existing=True)
+        logger.info(
+            "columnar.read_slice series_id=%s slice_start_index=%s len=%s",
+            series_id,
+            slice_start_index,
+            len(values),
+        )
         return list(values)
 
     def read_points(
@@ -386,6 +418,13 @@ class ColumnarSqliteStore:
                     continue
                 out.append((_us_to_dt(ts_us), value))
             slice_start += cfg.window_points
+        logger.info(
+            "columnar.read_points series_id=%s start=%s end=%s returned=%s",
+            series_id,
+            start.isoformat(),
+            end.isoformat(),
+            len(out),
+        )
         return out
 
     # Internals --------------------------------------------------------

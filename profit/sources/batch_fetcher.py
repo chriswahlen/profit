@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Optional, TypeVar
 
 from profit.cache import CacheMissError, FileCache, OfflineModeError
 from profit.sources.base_fetcher import BaseFetcher, RequestT, ResultT
+
+logger = logging.getLogger(__name__)
 
 
 class BatchFetcher(BaseFetcher[RequestT, ResultT]):
@@ -38,14 +41,21 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
     def fetch(self, request: RequestT, *, ttl: Optional[timedelta] = None) -> ResultT:
         cache_key = request.fingerprint()
         try:
-            return self.cache.get(cache_key, ttl=ttl).value
+            entry = self.cache.get(cache_key, ttl=ttl)
+            logger.info("cache hit key=%s", cache_key)
+            return entry.value
         except CacheMissError:
+            logger.info("cache miss key=%s", cache_key)
             if self.offline:
                 raise OfflineModeError(
                     f"Offline mode enabled and cache miss for {cache_key}"
                 )
 
-        result = self._with_retries(lambda: self._download_bulk(request))
+        def _call():
+            logger.info("network request fingerprint=%s", request.fingerprint())
+            return self._download_bulk(request)
+
+        result = self._with_retries(_call)
         self.cache.set(cache_key, result)
         return result
 

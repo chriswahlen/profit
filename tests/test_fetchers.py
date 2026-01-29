@@ -38,10 +38,7 @@ class FakeBatchFetcher(BatchFetcher[FakeRequest, int]):
 
 
 def test_chunking_and_cache_hit(tmp_path):
-    fetcher = FakeTimeseriesFetcher(
-        cache=FileCache(base_dir=tmp_path),
-        max_window_days=30,
-    )
+    fetcher = FakeTimeseriesFetcher(cache=FileCache(base_dir=tmp_path), max_window_days=30)
     req = FakeRequest("ABC")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start + timedelta(days=60)
@@ -105,3 +102,20 @@ def test_batch_fetcher_caches_bulk_download(tmp_path):
     offline = FakeBatchFetcher(cache=batch.cache, offline=True)
     with pytest.raises(OfflineModeError):
         offline.fetch(FakeRequest("NEW"))
+
+
+def test_logging_hits_and_misses(tmp_path, caplog):
+    fetcher = FakeTimeseriesFetcher(cache=FileCache(base_dir=tmp_path), max_window_days=None)
+    req = FakeRequest("LOG")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+
+    with caplog.at_level("INFO"):
+        fetcher.timeseries_fetch(req, start, end)
+        assert any("cache miss" in rec.message for rec in caplog.records)
+        assert any("network request" in rec.message for rec in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        fetcher.timeseries_fetch(req, start, end)
+        assert any("cache hit" in rec.message for rec in caplog.records)

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Generic, Optional, TypeVar
 
+from profit.config import ensure_profit_conf_loaded
 
 class CacheMissError(KeyError):
     """Raised when a cache lookup fails."""
@@ -23,7 +24,8 @@ T = TypeVar("T")
 
 
 def _default_cache_dir() -> Path:
-    base = os.environ.get("PROFIT_CACHE_DIR")
+    ensure_profit_conf_loaded()
+    base = os.environ.get("PROFIT_CACHE_DIR") or os.environ.get("PROFIT_CACHE_ROOT") or os.environ.get("PROFIT_CACHE")
     return Path(base) if base else Path(".cache") / "profit"
 
 
