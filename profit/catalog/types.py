@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,23 @@ class FetcherDescription:
     fields: list[str]
     max_window_days: int | None = None
     notes: str | None = None
+
+
+@dataclass(frozen=True)
+class InstrumentRecord:
+    """
+    Provider-neutral instrument metadata, mapped to a provider code.
+    """
+
+    instrument_id: str
+    instrument_type: str
+    provider: str
+    provider_code: str
+    mic: str | None
+    currency: str | None
+    active_from: datetime
+    active_to: datetime | None
+    attrs: dict[str, Any]
 
 
 class DiscoverableFetcher(Protocol):

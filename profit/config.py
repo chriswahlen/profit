@@ -68,6 +68,12 @@ def get_columnar_db_path(*, args=None, filename: str = "columnar.sqlite3") -> Pa
     return get_data_root() / filename
 
 
+def get_catalog_db_path(*, args=None, filename: str = "catalog.sqlite3") -> Path:
+    if args is not None and getattr(args, "catalog_path", None):
+        return Path(args.catalog_path)
+    return get_data_root() / filename
+
+
 def _reset_for_tests() -> None:  # pragma: no cover - test helper
     global _CONFIG_LOADED
     _CONFIG_LOADED = False
