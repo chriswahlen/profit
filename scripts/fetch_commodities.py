@@ -104,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         cache=cache,
         api_key=args.api_key,
         max_window_days=None,
-        catalog_path=args.catalog_path or store_path,
+        catalog_path=store_path,
         allow_network=True,
     )
     # Inject store for coverage adapter

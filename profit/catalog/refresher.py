@@ -41,8 +41,12 @@ class CatalogChecker:
     def require_present(self, provider: str, provider_code: str) -> None:
         row = self.store.get_instrument(provider, provider_code)
         if row is None:
-            logger.info("catalog missing symbol provider=%s code=%s; triggering refresh", provider, provider_code)
-            self.refresher.refresh(provider, allow_network=self.allow_network, use_cache_only=self.use_cache_only)
-            row = self.store.get_instrument(provider, provider_code)
+            meta = self.store.read_meta(provider)
+            now = datetime.now(timezone.utc)
+            stale = meta is None or now - meta["refreshed_at"] > self.max_age
+            if stale:
+                logger.info("catalog missing symbol provider=%s code=%s; triggering refresh", provider, provider_code)
+                self.refresher.refresh(provider, allow_network=self.allow_network, use_cache_only=self.use_cache_only)
+                row = self.store.get_instrument(provider, provider_code)
             if row is None:
                 raise RuntimeError(f"Instrument {provider}:{provider_code} not found in catalog after refresh")

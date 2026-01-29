@@ -39,13 +39,13 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         other_path = symbols_dir / "otherlisted.txt"
 
         self._download(
-            "https://ftp.nasdaqtrader.com/dynamic/SymbolDirectory/nasdaqtraded.txt",
+            "https://www.nasdaqtrader.com/dynamic/SymbolDirectory/nasdaqtraded.txt",
             nasdaq_path,
             allow_network=allow_network,
             use_cache_only=use_cache_only,
         )
         self._download(
-            "https://ftp.nasdaqtrader.com/dynamic/SymbolDirectory/otherlisted.txt",
+            "https://www.nasdaqtrader.com/dynamic/SymbolDirectory/otherlisted.txt",
             other_path,
             allow_network=allow_network,
             use_cache_only=use_cache_only,
@@ -55,6 +55,8 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         tickers.extend(self._parse_symbol_file(nasdaq_path, "NASDAQ Symbol"))
         tickers.extend(self._parse_symbol_file(other_path, "ACT Symbol"))
 
+        if not tickers:
+            raise RuntimeError("catalog refresh yfinance produced zero symbols; check downloaded files")
         logger.info("catalog refresh yfinance symbols=%s", len(tickers))
         records = [
             InstrumentRecord(
@@ -91,7 +93,7 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         with path.open() as fh:
             reader = csv.DictReader(fh, delimiter="|")
             for row in reader:
-                sym = (row.get(sym_col) or "").strip()
+                sym = (row.get(sym_col) or row.get("Symbol") or "").strip()
                 if not sym or sym.upper() == "SYMBOL":
                     continue
                 if not self.include_etf and (row.get("ETF") or "").upper() == "Y":
