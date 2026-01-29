@@ -14,3 +14,5 @@ By default the columnar database is stored under the **data root** (`PROFIT_DATA
 ```
 python scripts/fetch_fx.py --base EUR --quote USD --start 2025-01-01 --end 2025-01-15 --read-back
 ```
+
+`scripts/fetch_commodities.py` (to be added) will fetch daily commodity prices (initially gold/silver via Alpha Vantage) into `ColumnarSqliteStore` under dataset `commodity_price:{source}:{version}`.
