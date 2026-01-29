@@ -33,11 +33,11 @@ def test_yfinance_fetcher_handles_multiindex(monkeypatch):
         provider_code="AAPL",
         freq="1d",
     )
-    bars = fetcher.timeseries_fetch(
-        req,
+    bars = fetcher.timeseries_fetch_many(
+        [req],
         datetime(2025, 1, 1, tzinfo=timezone.utc),
         datetime(2025, 1, 1, tzinfo=timezone.utc),
-    )
+    )[0]
     assert len(bars) == 1
     bar = bars[0]
     assert bar.close_raw == 1.5

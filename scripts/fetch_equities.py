@@ -120,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     fetcher = YFinanceDailyBarsFetcher(cache=cache, store=store)
 
     print(f"Ensuring coverage for {args.ticker} {start.date()} → {end.date()} via yfinance...")
-    fetcher.timeseries_fetch(request, start, end)
+    fetcher.timeseries_fetch_many([request], start, end)
 
     for field in args.read_fields:
         _print_points(store, dataset, request.instrument_id, field, start, end)

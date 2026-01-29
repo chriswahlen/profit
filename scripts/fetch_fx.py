@@ -91,7 +91,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     fetcher = YFinanceFxDailyFetcher(cache=cache, store=store)
 
     print(f"Ensuring coverage for FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
-    fetcher.timeseries_fetch(req, start, end)
+    fetcher.timeseries_fetch_many([req], start, end)
 
     if args.read_back:
         series_id = store.get_series_id(

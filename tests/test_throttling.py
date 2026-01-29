@@ -23,11 +23,11 @@ class ThrottleFetcher(BaseFetcher[DummyReq, int]):
         self.raises = raises
         self.calls = 0
 
-    def _fetch_timeseries_chunk(self, request, start, end):  # type: ignore[override]
+    def _fetch_timeseries_chunk_many(self, requests, start, end):
         self.calls += 1
         if self.raises:
             raise self.raises.pop(0)
-        return 1
+        return {req: 1 for req in requests}
 
 
 def test_throttled_error_retries_until_success(tmp_path):
@@ -44,7 +44,7 @@ def test_throttled_error_retries_until_success(tmp_path):
     req = DummyReq("t")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start
-    out = fetcher.timeseries_fetch(req, start, end)
+    out = fetcher.timeseries_fetch_many([req], start, end)[0]
     assert out == 1
     assert fetcher.calls == 2  # one throttle, one success
     # Sleep should respect retry_after_cap (0.5) and max_backoff (1.0)
@@ -67,7 +67,7 @@ def test_throttled_error_exceeds_attempts(tmp_path):
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start
     with pytest.raises(ThrottledError):
-        fetcher.timeseries_fetch(req, start, end)
+        fetcher.timeseries_fetch_many([req], start, end)[0]
     # Two attempts: raise, retry, raise -> then stop.
     assert fetcher.calls == 2
     # First sleep capped by retry_after_cap=0.5

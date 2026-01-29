@@ -71,8 +71,9 @@ class EquitiesDailyFetcher(BaseFetcher[EquityDailyBarsRequest, list[EquityDailyB
     """
     Base class for daily equity bar providers.
 
-    Subclasses implement `_fetch_timeseries_chunk` and return a list of
-    `EquityDailyBar` entries for the inclusive [start, end] window.
+    Subclasses implement `_fetch_timeseries_chunk_many` and return a mapping of
+    request -> list of `EquityDailyBar` entries for the inclusive [start, end]
+    window.
     """
 
     def _combine_chunks(
@@ -105,4 +106,3 @@ class EquitiesDailyFetcher(BaseFetcher[EquityDailyBarsRequest, list[EquityDailyB
         for bar in bars:
             if bar.ts_utc.tzinfo is None or bar.ts_utc.utcoffset() != timezone.utc.utcoffset(bar.ts_utc):
                 raise ValueError("bar.ts_utc must be timezone-aware UTC")
-

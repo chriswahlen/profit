@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -33,14 +35,16 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
     monkeypatch.setenv("PROFIT_CACHE_DIR", str(tmp_path / "cache"))
     calls = {"fetch": 0}
 
-    def fake_chunk(self, request, start, end):
+    def fake_chunk(self, requests, start, end):
         calls["fetch"] += 1
-        return []
+        return {req: [] for req in requests}
 
+    # Ensure repo root is on sys.path for namespace import of scripts.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts import fetch_equities
     from profit.sources.equities.yfinance import YFinanceDailyBarsFetcher
 
-    monkeypatch.setattr(YFinanceDailyBarsFetcher, "_fetch_timeseries_chunk", fake_chunk, raising=False)
+    monkeypatch.setattr(YFinanceDailyBarsFetcher, "_fetch_timeseries_chunk_many", fake_chunk, raising=False)
 
 
     args = [

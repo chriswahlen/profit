@@ -59,8 +59,8 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
         self.cache.set(cache_key, result)
         return result
 
-    def _fetch_timeseries_chunk(self, request: RequestT, start, end) -> ResultT:  # type: ignore[override]
-        raise NotImplementedError("BatchFetcher does not support timeseries chunks")
+    def _fetch_timeseries_chunk_many(self, requests, start, end):  # type: ignore[override]
+        raise NotImplementedError("BatchFetcher does not support timeseries batch timeseries_fetch_many")
 
     def _combine_chunks(self, chunks):  # type: ignore[override]
         return chunks

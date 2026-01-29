@@ -11,33 +11,36 @@ def _dt(y: int, m: int, d: int) -> datetime:
     return datetime(y, m, d, tzinfo=timezone.utc)
 
 
-def test_fx_fetcher_dedup_and_sort():
-    class FakeFxFetcher(FxDailyFetcher):
-        def _fetch_timeseries_chunk(self, request, start, end):
-            return [
-                FxRatePoint(
-                    base_ccy=request.base_ccy,
-                    quote_ccy=request.quote_ccy,
-                    ts_utc=start,
-                    rate=1.1,
-                    source=request.provider,
-                    version="v1",
-                    asof=_dt(2026, 1, 1),
-                ),
-                FxRatePoint(
-                    base_ccy=request.base_ccy,
-                    quote_ccy=request.quote_ccy,
-                    ts_utc=start,
-                    rate=1.1,
-                    source=request.provider,
-                    version="v1",
-                    asof=_dt(2026, 1, 1),
-                ),
-            ]
+    def test_fx_fetcher_dedup_and_sort():
+        class FakeFxFetcher(FxDailyFetcher):
+            def _fetch_timeseries_chunk_many(self, requests, start, end):
+                results = {}
+                for request in requests:
+                    results[request] = [
+                        FxRatePoint(
+                            base_ccy=request.base_ccy,
+                            quote_ccy=request.quote_ccy,
+                            ts_utc=start,
+                            rate=1.1,
+                            source=request.provider,
+                            version="v1",
+                            asof=_dt(2026, 1, 1),
+                        ),
+                        FxRatePoint(
+                            base_ccy=request.base_ccy,
+                            quote_ccy=request.quote_ccy,
+                            ts_utc=start,
+                            rate=1.1,
+                            source=request.provider,
+                            version="v1",
+                            asof=_dt(2026, 1, 1),
+                        ),
+                    ]
+                return results
 
     fetcher = FakeFxFetcher(cache=None, max_window_days=None)
     req = FxRequest(base_ccy="EUR", quote_ccy="USD", provider="fake", provider_code="EURUSD")
-    pts = fetcher.timeseries_fetch(req, _dt(2020, 1, 1), _dt(2020, 1, 1))
+    pts = fetcher.timeseries_fetch_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1))[0]
     assert len(pts) == 1
     assert pts[0].rate == 1.1
 
@@ -56,6 +59,6 @@ def test_yfinance_fx_handles_dataframe(monkeypatch):
 
     fetcher = YFinanceFxDailyFetcher(cache=None, max_window_days=None)
     req = FxRequest(base_ccy="EUR", quote_ccy="USD", provider="yfinance", provider_code="EURUSD=X")
-    pts = fetcher.timeseries_fetch(req, _dt(2025, 1, 2), _dt(2025, 1, 2))
+    pts = fetcher.timeseries_fetch_many([req], _dt(2025, 1, 2), _dt(2025, 1, 2))[0]
     assert len(pts) == 1
     assert pts[0].rate == 1.2345

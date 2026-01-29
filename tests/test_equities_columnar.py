@@ -103,7 +103,30 @@ def test_columnar_ohlcv_writer_roundtrip(tmp_path):
 
 def test_equities_fetcher_combines_and_dedups(tmp_path):
     class FakeFetcher(EquitiesDailyFetcher):
-        def _fetch_timeseries_chunk(self, request, start, end):
+        def _fetch_timeseries_chunk_many(self, requests, start, end):
+            results = {}
+            for request in requests:
+                bar = EquityDailyBar(
+                    instrument_id=request.instrument_id,
+                    ts_utc=start,
+                    open_raw=1.0,
+                    high_raw=1.0,
+                    low_raw=1.0,
+                    close_raw=1.0,
+                    volume_raw=1.0,
+                    open_adj=1.0,
+                    high_adj=1.0,
+                    low_adj=1.0,
+                    close_adj=1.0,
+                    volume_adj=1.0,
+                    source=request.provider,
+                    version="v1",
+                    asof=_dt(2026, 1, 1),
+                )
+                results[request] = [bar, bar]
+            return results
+
+        def _fetch_timeseries_chunk(self, request, start, end):  # pragma: no cover - compatibility
             bar = EquityDailyBar(
                 instrument_id=request.instrument_id,
                 ts_utc=start,
@@ -130,6 +153,6 @@ def test_equities_fetcher_combines_and_dedups(tmp_path):
         provider_code="AAPL",
         freq="1d",
     )
-    bars = fetcher.timeseries_fetch(req, _dt(2020, 1, 1), _dt(2020, 1, 1))
+    bars = fetcher.timeseries_fetch_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1))[0]
     assert isinstance(bars, list)
     assert len(bars) == 1

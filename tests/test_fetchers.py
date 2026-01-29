@@ -22,9 +22,15 @@ class FakeTimeseriesFetcher(BaseFetcher[FakeRequest, tuple[datetime, datetime]])
         super().__init__(*args, **kwargs)
         self.calls: list[tuple[datetime, datetime]] = []
 
-    def _fetch_timeseries_chunk(self, request, start, end):
+    def _fetch_timeseries_chunk_many(self, requests, start, end):
+        # Record each chunk window once (per batch slice).
         self.calls.append((start, end))
-        return (start, end)
+        return {req: (start, end) for req in requests}
+
+
+def _fetch_single(fetcher: BaseFetcher, req: FakeRequest, start: datetime, end: datetime, *, coverage=None):
+    cov_map = {req: coverage} if coverage else None
+    return fetcher.timeseries_fetch_many([req], start, end, coverage_by_request=cov_map)[0]
 
 
 class FakeBatchFetcher(BatchFetcher[FakeRequest, int]):
@@ -43,11 +49,11 @@ def test_chunking_and_cache_hit(tmp_path):
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start + timedelta(days=60)
 
-    first = fetcher.timeseries_fetch(req, start, end)
+    first = _fetch_single(fetcher, req, start, end)
     assert len(fetcher.calls) == 3  # 61 days -> 3 chunks of 30/30/1
     assert len(first) == 3
 
-    second = fetcher.timeseries_fetch(req, start, end)
+    second = _fetch_single(fetcher, req, start, end)
     assert second == first
     assert len(fetcher.calls) == 3  # no additional network calls
 
@@ -63,7 +69,7 @@ def test_offline_cache_miss_raises(tmp_path):
     end = start
 
     with pytest.raises(OfflineModeError):
-        fetcher.timeseries_fetch(req, start, end)
+        _fetch_single(fetcher, req, start, end)
 
 
 def test_expired_cache_triggers_refetch(tmp_path):
@@ -73,7 +79,7 @@ def test_expired_cache_triggers_refetch(tmp_path):
     start = datetime(2022, 6, 1, tzinfo=timezone.utc)
     end = start
 
-    first = fetcher.timeseries_fetch(req, start, end)
+    first = _fetch_single(fetcher, req, start, end)
     assert len(fetcher.calls) == 1
 
     # Force the cache entry to be stale.
@@ -82,7 +88,7 @@ def test_expired_cache_triggers_refetch(tmp_path):
     old_ts = (start - timedelta(days=10)).timestamp()
     os.utime(path, (old_ts, old_ts))
 
-    second = fetcher.timeseries_fetch(req, start, end)
+    second = _fetch_single(fetcher, req, start, end)
     assert second == first
     assert len(fetcher.calls) == 2  # refetched because TTL expired
 
@@ -129,7 +135,7 @@ def test_timeseries_fetch_skips_when_coverage_complete():
     end = start
 
     coverage = DummyCoverageAdapter(gaps=[], result=[("from_store", 1)])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     assert out == [("from_store", 1)]
     # No network calls made.
     assert fetcher.calls == []
@@ -145,7 +151,7 @@ def test_timeseries_fetch_uses_network_when_gaps_exist(tmp_path):
     end = start
 
     coverage = DummyCoverageAdapter(gaps=[(start, end)])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     # Should call network once for the chunk.
     assert len(fetcher.calls) == 1
     assert out == []
@@ -170,7 +176,7 @@ def test_timeseries_fetch_chunks_with_coverage(tmp_path):
             return "from_store"
 
     coverage = Cov(gaps=[(start, end)])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     assert calls["writes"] == 3  # one per chunk
     assert len(fetcher.calls) == 3
     assert out == "from_store"
@@ -200,7 +206,7 @@ def test_timeseries_fetch_uses_cache_for_some_gaps(tmp_path):
             return ["final"]
 
     coverage = Cov(gaps=[(start, mid), (mid + timedelta(days=1), end)])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     # One cache write for cached chunk, one network chunk
     assert calls["writes"] == 2
     assert len(fetcher.calls) == 1  # only the uncached chunk hit network
@@ -219,7 +225,7 @@ def test_timeseries_fetch_offline_with_gaps_raises(tmp_path):
 
     coverage = DummyCoverageAdapter(gaps=[(start, end)])
     with pytest.raises(OfflineModeError):
-        fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+        _fetch_single(fetcher, req, start, end, coverage=coverage)
     assert fetcher.calls == []
 
 
@@ -227,11 +233,11 @@ def test_timeseries_fetch_retry_with_coverage(tmp_path):
     attempts = {"n": 0}
 
     class RetryFetcher(FakeTimeseriesFetcher):
-        def _fetch_timeseries_chunk(self, request, start, end):  # type: ignore[override]
+        def _fetch_timeseries_chunk_many(self, requests, start, end):  # type: ignore[override]
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise ValueError("transient")
-            return super()._fetch_timeseries_chunk(request, start, end)
+            return super()._fetch_timeseries_chunk_many(requests, start, end)
 
     fetcher = RetryFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
@@ -241,7 +247,7 @@ def test_timeseries_fetch_retry_with_coverage(tmp_path):
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start
     coverage = DummyCoverageAdapter(gaps=[(start, end)])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     assert attempts["n"] == 2
     assert out == []
 
@@ -255,7 +261,7 @@ def test_timeseries_fetch_complete_but_empty_returns_store(tmp_path):
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start
     coverage = DummyCoverageAdapter(gaps=[], result=[])
-    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    out = _fetch_single(fetcher, req, start, end, coverage=coverage)
     assert out == []
 
 
@@ -274,7 +280,7 @@ def test_timeseries_fetch_malformed_gap(tmp_path):
 
     coverage = Cov(gaps=[])
     with pytest.raises(ValueError):
-        fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+        _fetch_single(fetcher, req, start, end, coverage=coverage)
 
 
 def test_logging_hits_and_misses(tmp_path, caplog):
@@ -284,11 +290,11 @@ def test_logging_hits_and_misses(tmp_path, caplog):
     end = start
 
     with caplog.at_level("INFO"):
-        fetcher.timeseries_fetch(req, start, end)
+        _fetch_single(fetcher, req, start, end)
         assert any("cache miss" in rec.message for rec in caplog.records)
         assert any("network request" in rec.message for rec in caplog.records)
 
     caplog.clear()
     with caplog.at_level("INFO"):
-        fetcher.timeseries_fetch(req, start, end)
+        _fetch_single(fetcher, req, start, end)
         assert any("cache hit" in rec.message for rec in caplog.records)

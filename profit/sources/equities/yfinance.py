@@ -43,41 +43,61 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
         self._coverage_store = store
         self._coverage_adapter_cls = EquitiesCoverageAdapter
 
-    def _fetch_timeseries_chunk(
-        self, request: EquityDailyBarsRequest, start: datetime, end: datetime
-    ) -> list[EquityDailyBar]:
-        if request.provider != self.source:
-            raise ValueError(f"Request provider {request.provider!r} does not match fetcher {self.source!r}")
-        if request.freq != "1d":
-            raise ValueError("YFinanceDailyBarsFetcher only supports freq='1d'")
+    def coverage_adapter(self, request: EquityDailyBarsRequest):
+        return self._coverage_adapter_cls(
+            self._coverage_store,
+            instrument_id=request.instrument_id,
+            source=self.source,
+            version=self.version,
+        )
+
+    def _fetch_timeseries_chunk_many(
+        self, requests: list[EquityDailyBarsRequest], start: datetime, end: datetime
+    ) -> dict[EquityDailyBarsRequest, list[EquityDailyBar]]:
+        """
+        Batch-fetch daily bars for many equities using yfinance's multi-symbol
+        download. Returns a mapping of request -> list of bars covering the
+        inclusive [start, end] window.
+        """
+        if not requests:
+            return {}
+
+        for req in requests:
+            if req.provider != self.source:
+                raise ValueError(f"Request provider {req.provider!r} does not match fetcher {self.source!r}")
+            if req.freq != "1d":
+                raise ValueError("YFinanceDailyBarsFetcher only supports freq='1d'")
 
         try:
             import yfinance as yf  # type: ignore
+            import pandas as pd  # type: ignore
         except ModuleNotFoundError as exc:
             raise ModuleNotFoundError(
                 "Missing optional dependency 'yfinance'. Install it to use YFinanceDailyBarsFetcher."
             ) from exc
 
-        # yfinance uses an exclusive end. Normalize to date buckets.
         start_utc = _to_utc(start).date()
         end_exclusive = _to_utc(end).date() + timedelta(days=1)
 
+        codes = [req.provider_code for req in requests]
         try:
             raw_df = yf.download(
-                request.provider_code,
+                codes,
                 start=start_utc,
                 end=end_exclusive,
                 auto_adjust=False,
                 actions=False,
                 progress=False,
+                group_by="ticker",
             )
             adj_df = yf.download(
-                request.provider_code,
+                codes,
                 start=start_utc,
                 end=end_exclusive,
                 auto_adjust=True,
                 actions=False,
                 progress=False,
+                group_by="ticker",
             )
         except Exception as exc:
             retry_after = None
@@ -92,24 +112,26 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
                 raise ThrottledError("yfinance HTTP 429", retry_after=retry_after) from exc
             raise
 
-        if raw_df is None or adj_df is None:
-            return []
-        if getattr(raw_df, "empty", False) or getattr(adj_df, "empty", False):
-            return []
+        # Normalize single-ticker frames to MultiIndex shape for uniform handling.
+        def _normalize_df(df: pd.DataFrame | None, code: str) -> pd.DataFrame | None:
+            if df is None:
+                return None
+            if isinstance(df.columns, pd.MultiIndex):
+                return df
+            # Single ticker: wrap columns into a MultiIndex (code, field)
+            df_copy = df.copy()
+            df_copy.columns = pd.MultiIndex.from_product([[code], list(df.columns)])
+            return df_copy
 
-        # Join on the date index intersection.
-        raw_idx = list(raw_df.index)
-        adj_idx = set(adj_df.index)
-        keys = [k for k in raw_idx if k in adj_idx]
-        keys.sort()
+        if raw_df is None or adj_df is None:
+            return {req: [] for req in requests}
+
+        raw_df = _normalize_df(raw_df, codes[0])
+        adj_df = _normalize_df(adj_df, codes[0])
+        if raw_df is None or adj_df is None:
+            return {req: [] for req in requests}
 
         asof = _to_utc(self._clock())
-
-        def _single_row(df, key):
-            row = df.loc[key]
-            if hasattr(row, "columns"):
-                row = row.iloc[-1]
-            return row
 
         def _scalar(val):
             if hasattr(val, "iloc"):
@@ -122,49 +144,63 @@ class YFinanceDailyBarsFetcher(EquitiesDailyFetcher):
             try:
                 return float(val)
             except TypeError:
-                # Fallback for dict-like or iterable.
                 try:
                     return float(list(val)[-1])  # type: ignore[arg-type]
                 except Exception as exc:  # pragma: no cover - defensive
                     raise TypeError(f"Cannot convert value to float: {val!r}") from exc
 
-        out: list[EquityDailyBar] = []
-        for k in keys:
-            # pandas.Timestamp -> python datetime
-            ts = getattr(k, "to_pydatetime", lambda: k)()
-            if isinstance(ts, datetime):
-                ts_utc = _to_utc(ts)
-            else:
-                # Assume date-like value.
-                ts_utc = datetime(ts.year, ts.month, ts.day, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+        out: dict[EquityDailyBarsRequest, list[EquityDailyBar]] = {}
+        for req in requests:
+            code = req.provider_code
+            try:
+                raw_sub = raw_df[code]
+                adj_sub = adj_df[code]
+            except Exception:
+                out[req] = []
+                continue
 
-            raw_row = _single_row(raw_df, k)
-            adj_row = _single_row(adj_df, k)
-            out.append(
-                EquityDailyBar(
-                    instrument_id=request.instrument_id,
-                    ts_utc=ts_utc,
-                    open_raw=_scalar(raw_row["Open"]),
-                    high_raw=_scalar(raw_row["High"]),
-                    low_raw=_scalar(raw_row["Low"]),
-                    close_raw=_scalar(raw_row["Close"]),
-                    volume_raw=_scalar(raw_row["Volume"]),
-                    open_adj=_scalar(adj_row["Open"]),
-                    high_adj=_scalar(adj_row["High"]),
-                    low_adj=_scalar(adj_row["Low"]),
-                    close_adj=_scalar(adj_row["Close"]),
-                    volume_adj=_scalar(adj_row["Volume"]),
-                    source=self.source,
-                    version=self.version,
-                    asof=asof,
+            if getattr(raw_sub, "empty", False) or getattr(adj_sub, "empty", False):
+                out[req] = []
+                continue
+
+            keys = list(set(raw_sub.index).intersection(set(adj_sub.index)))
+            keys.sort()
+
+            bars: list[EquityDailyBar] = []
+            for k in keys:
+                ts = getattr(k, "to_pydatetime", lambda: k)()
+                if isinstance(ts, datetime):
+                    ts_utc = _to_utc(ts)
+                else:
+                    ts_utc = datetime(ts.year, ts.month, ts.day, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+
+                raw_row = raw_sub.loc[k]
+                adj_row = adj_sub.loc[k]
+                # Normalize row in case of DataFrame slice returning DataFrame
+                if hasattr(raw_row, "columns"):
+                    raw_row = raw_row.iloc[-1]
+                if hasattr(adj_row, "columns"):
+                    adj_row = adj_row.iloc[-1]
+
+                bars.append(
+                    EquityDailyBar(
+                        instrument_id=req.instrument_id,
+                        ts_utc=ts_utc,
+                        open_raw=_scalar(raw_row["Open"]),
+                        high_raw=_scalar(raw_row["High"]),
+                        low_raw=_scalar(raw_row["Low"]),
+                        close_raw=_scalar(raw_row["Close"]),
+                        volume_raw=_scalar(raw_row["Volume"]),
+                        open_adj=_scalar(adj_row["Open"]),
+                        high_adj=_scalar(adj_row["High"]),
+                        low_adj=_scalar(adj_row["Low"]),
+                        close_adj=_scalar(adj_row["Close"]),
+                        volume_adj=_scalar(adj_row["Volume"]),
+                        source=self.source,
+                        version=self.version,
+                        asof=asof,
+                    )
                 )
-            )
-        return out
+            out[req] = bars
 
-    def coverage_adapter(self, request: EquityDailyBarsRequest):
-        return self._coverage_adapter_cls(
-            self._coverage_store,
-            instrument_id=request.instrument_id,
-            source=self.source,
-            version=self.version,
-        )
+        return out
