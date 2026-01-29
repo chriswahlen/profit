@@ -16,6 +16,7 @@ from profit.sources.fx import (
     FxRequest,
     YFinanceFxDailyFetcher,
 )
+from profit.sources.fx.coverage_adapter import FxCoverageAdapter
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -110,41 +111,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     cfg = ColumnarFxConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     pair = f"{req.base_ccy}/{req.quote_ccy}"
-    series_id = store.get_series_id(
-        instrument_id=pair,
-        dataset=dataset,
-        field="rate",
-        step_us=cfg.step_us,
-    )
-    missing_ranges: list[tuple[datetime, datetime]] = []
-    if series_id is not None:
-        missing_ranges = store.get_unfetched_ranges(series_id, start=start, end=end)
-        if not missing_ranges:
-            print("Range already complete in columnar store; skipping fetch.")
-            pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
-            print(f"Read back {len(pts)} points:")
-            for ts, rate in pts:
-                print(f"  {ts.date().isoformat()} rate={rate}")
-            return
-
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
+    coverage = FxCoverageAdapter(
+        store,
+        pair=pair,
+        source="yfinance",
+        version="v1",
+    )
     fetcher = YFinanceFxDailyFetcher(cache=cache, max_window_days=30)
-    rates = []
-    if missing_ranges:
-        print(f"Missing {len(missing_ranges)} sub-range(s); fetching only gaps via yfinance...")
-        for gap_start, gap_end in missing_ranges:
-            print(f"  gap: {gap_start.date()} → {gap_end.date()}")
-            rates.extend(fetcher.timeseries_fetch(req, gap_start, gap_end))
-    else:
-        print(f"Fetching FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
-        rates = fetcher.timeseries_fetch(req, start, end)
-    if not rates:
-        print("Provider returned no rates.")
-        return
 
-    writer = ColumnarFxWriter(store, cfg=ColumnarFxConfig())
-    inserted = writer.write_rates(rates, coverage_start=start, coverage_end=end)
-    print(f"Wrote {inserted} FX points to {store_path}")
+    print(f"Ensuring coverage for FX {req.base_ccy}/{req.quote_ccy} {start.date()} → {end.date()} via yfinance...")
+    fetcher.timeseries_fetch(req, start, end, coverage=coverage)
 
     if args.read_back:
         series_id = store.get_series_id(

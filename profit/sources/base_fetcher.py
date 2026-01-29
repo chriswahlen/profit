@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Generic, Iterable, List, Optional, Sequence, Tuple, Type, TypeVar
 
 from profit.cache import CacheMissError, FileCache, OfflineModeError
+from profit.sources.coverage import CoverageAdapter
 from profit.sources.types import Fingerprintable
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
@@ -55,6 +56,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         end: datetime,
         *,
         ttl: Optional[timedelta] = None,
+        coverage: CoverageAdapter | None = None,
     ) -> ResultT | List[ResultT]:
         """
         Fetch data for the requested time span, splitting into chunks when
@@ -65,6 +67,44 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if start > end:
             raise ValueError("start must be <= end")
 
+        # Coverage-aware path
+        if coverage is not None:
+            gaps = coverage.get_unfetched_ranges(start, end)
+            if not gaps:
+                logger.info("coverage hit; returning stored data without fetch")
+                return coverage.read_points(start, end)
+
+            for gap_start, gap_end in gaps:
+                for chunk_start, chunk_end in self._chunk_ranges(gap_start, gap_end):
+                    cache_key = self._fingerprint(request, chunk_start, chunk_end)
+                    try:
+                        entry = self.cache.get(cache_key, ttl=ttl)
+                        logger.info("cache hit key=%s", cache_key)
+                        coverage.write_points(entry.value)
+                        continue
+                    except CacheMissError:
+                        logger.info("cache miss key=%s", cache_key)
+                        if self.offline:
+                            raise OfflineModeError(
+                                f"Offline mode enabled and cache miss for {cache_key}"
+                            )
+
+                    def _call() -> ResultT:
+                        logger.info(
+                            "network request fingerprint=%s start=%s end=%s",
+                            request.fingerprint(),
+                            chunk_start.isoformat(),
+                            chunk_end.isoformat(),
+                        )
+                        return self._fetch_timeseries_chunk(request, chunk_start, chunk_end)
+
+                    result = self._with_retries(_call)
+                    self.cache.set(cache_key, result)
+                    coverage.write_points(result)
+
+            return coverage.read_points(start, end)
+
+        # Legacy path (no coverage adapter)
         chunks: List[ResultT] = []
         for chunk_start, chunk_end in self._chunk_ranges(start, end):
             cache_key = self._fingerprint(request, chunk_start, chunk_end)

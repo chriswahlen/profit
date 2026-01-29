@@ -17,6 +17,7 @@ from profit.sources.equities import (
     EquityDailyBarsRequest,
     YFinanceDailyBarsFetcher,
 )
+from profit.sources.equities.coverage_adapter import EquitiesCoverageAdapter
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -139,45 +140,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     store = ColumnarSqliteStore(db_path=store_path)
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
-    close_series = store.get_series_id(
-        instrument_id=request.instrument_id,
-        dataset=dataset,
-        field="close_raw",
-        step_us=DAY_US,
-    )
-    missing_ranges: list[tuple[datetime, datetime]] = []
-    if close_series is not None:
-        missing_ranges = store.get_unfetched_ranges(close_series, start=start, end=end)
-        if not missing_ranges:
-            print("Range already complete in columnar store; skipping fetch.")
-            for field in args.read_fields:
-                _print_points(store, dataset, request.instrument_id, field, start, end)
-            return
-
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
+    coverage = EquitiesCoverageAdapter(
+        store,
+        instrument_id=request.instrument_id,
+        source="yfinance",
+        version="v1",
+    )
     fetcher = YFinanceDailyBarsFetcher(cache=cache, max_window_days=30)
 
-    bars = []
-    if missing_ranges:
-        print(f"Missing {len(missing_ranges)} sub-range(s); fetching only gaps via yfinance...")
-        for gap_start, gap_end in missing_ranges:
-            print(f"  gap: {gap_start.date()} → {gap_end.date()}")
-            bars.extend(fetcher.timeseries_fetch(request, gap_start, gap_end))
-    else:
-        print(f"Fetching {args.ticker} bars {start.date()} → {end.date()} via yfinance...")
-        bars = fetcher.timeseries_fetch(request, start, end)
+    print(f"Ensuring coverage for {args.ticker} {start.date()} → {end.date()} via yfinance...")
+    fetcher.timeseries_fetch(request, start, end, coverage=coverage)
 
-    if not bars:
-        print("Provider returned no bars.")
-        return
-
-    writer = ColumnarOhlcvWriter(store)
-    counts = writer.write_daily_bars(bars, coverage_start=start, coverage_end=end)
-    print("Written fields:")
-    for field, count in counts.items():
-        print(f"  {field}: {count} points")
-
-    dataset = cfg.dataset_name(source=bars[0].source, version=bars[0].version)
     for field in args.read_fields:
         _print_points(store, dataset, request.instrument_id, field, start, end)
 

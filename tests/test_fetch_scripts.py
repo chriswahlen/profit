@@ -29,21 +29,19 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
     )
     store.mark_range_fetched(sid, start=_dt(2020, 1, 1), end=_dt(2020, 1, 2))
 
-    called = {"fetch": 0}
-
-    class FakeFetcher:
-        def __init__(self, *_, **__):
-            pass
-
-        def timeseries_fetch(self, *_, **__):
-            called["fetch"] += 1
-            return []
-
     monkeypatch.setenv("PROFIT_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("PROFIT_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("scripts.fetch_equities.YFinanceDailyBarsFetcher", FakeFetcher)
+    calls = {"fetch": 0}
+
+    def fake_chunk(self, request, start, end):
+        calls["fetch"] += 1
+        return []
 
     from scripts import fetch_equities
+    from profit.sources.equities.yfinance import YFinanceDailyBarsFetcher
+
+    monkeypatch.setattr(YFinanceDailyBarsFetcher, "_fetch_timeseries_chunk", fake_chunk, raising=False)
+
 
     args = [
         "--ticker",
@@ -59,4 +57,4 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
     ]
     # Run main; should skip fetch because range is already complete.
     fetch_equities.main(args)
-    assert called["fetch"] == 0
+    assert calls["fetch"] == 0

@@ -104,6 +104,179 @@ def test_batch_fetcher_caches_bulk_download(tmp_path):
         offline.fetch(FakeRequest("NEW"))
 
 
+class DummyCoverageAdapter:
+    def __init__(self, gaps, result=None):
+        self.gaps = gaps
+        self.result = result or []
+
+    def get_unfetched_ranges(self, start, end):
+        return list(self.gaps)
+
+    def write_points(self, payload):
+        pass
+
+    def read_points(self, start, end):
+        return self.result
+
+
+def test_timeseries_fetch_skips_when_coverage_complete():
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=None),  # in-memory path
+        max_window_days=None,
+    )
+    req = FakeRequest("SKIP")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+
+    coverage = DummyCoverageAdapter(gaps=[], result=[("from_store", 1)])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    assert out == [("from_store", 1)]
+    # No network calls made.
+    assert fetcher.calls == []
+
+
+def test_timeseries_fetch_uses_network_when_gaps_exist(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=None,
+    )
+    req = FakeRequest("GAPS")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+
+    coverage = DummyCoverageAdapter(gaps=[(start, end)])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    # Should call network once for the chunk.
+    assert len(fetcher.calls) == 1
+    assert out == []
+
+
+def test_timeseries_fetch_chunks_with_coverage(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=30,
+    )
+    req = FakeRequest("CHUNK")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2020, 3, 1, tzinfo=timezone.utc)  # spans 61 days → 3 chunks
+
+    calls = {"writes": 0}
+
+    class Cov(DummyCoverageAdapter):
+        def write_points(self, payload):
+            calls["writes"] += 1
+
+        def read_points(self, s, e):
+            return "from_store"
+
+    coverage = Cov(gaps=[(start, end)])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    assert calls["writes"] == 3  # one per chunk
+    assert len(fetcher.calls) == 3
+    assert out == "from_store"
+
+
+def test_timeseries_fetch_uses_cache_for_some_gaps(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=30,
+    )
+    req = FakeRequest("CACHE")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    mid = datetime(2020, 1, 30, tzinfo=timezone.utc)
+    end = datetime(2020, 2, 1, tzinfo=timezone.utc)
+
+    # Seed cache for first gap
+    cache_key = fetcher._fingerprint(req, start, mid)  # type: ignore[attr-defined]
+    fetcher.cache.set(cache_key, ("cached",))
+
+    calls = {"writes": 0}
+
+    class Cov(DummyCoverageAdapter):
+        def write_points(self, payload):
+            calls["writes"] += 1
+
+        def read_points(self, s, e):
+            return ["final"]
+
+    coverage = Cov(gaps=[(start, mid), (mid + timedelta(days=1), end)])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    # One cache write for cached chunk, one network chunk
+    assert calls["writes"] == 2
+    assert len(fetcher.calls) == 1  # only the uncached chunk hit network
+    assert out == ["final"]
+
+
+def test_timeseries_fetch_offline_with_gaps_raises(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=None,
+        offline=True,
+    )
+    req = FakeRequest("OFFLINE")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+
+    coverage = DummyCoverageAdapter(gaps=[(start, end)])
+    with pytest.raises(OfflineModeError):
+        fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    assert fetcher.calls == []
+
+
+def test_timeseries_fetch_retry_with_coverage(tmp_path):
+    attempts = {"n": 0}
+
+    class RetryFetcher(FakeTimeseriesFetcher):
+        def _fetch_timeseries_chunk(self, request, start, end):  # type: ignore[override]
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise ValueError("transient")
+            return super()._fetch_timeseries_chunk(request, start, end)
+
+    fetcher = RetryFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=None,
+    )
+    req = FakeRequest("RETRY")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+    coverage = DummyCoverageAdapter(gaps=[(start, end)])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    assert attempts["n"] == 2
+    assert out == []
+
+
+def test_timeseries_fetch_complete_but_empty_returns_store(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=None,
+    )
+    req = FakeRequest("EMPTY")
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = start
+    coverage = DummyCoverageAdapter(gaps=[], result=[])
+    out = fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+    assert out == []
+
+
+def test_timeseries_fetch_malformed_gap(tmp_path):
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        max_window_days=None,
+    )
+    req = FakeRequest("BADGAP")
+    start = datetime(2020, 1, 2, tzinfo=timezone.utc)
+    end = datetime(2020, 1, 1, tzinfo=timezone.utc)  # malformed (end before start)
+
+    class Cov(DummyCoverageAdapter):
+        def get_unfetched_ranges(self, s, e):
+            return [(end, start)]  # reversed
+
+    coverage = Cov(gaps=[])
+    with pytest.raises(ValueError):
+        fetcher.timeseries_fetch(req, start, end, coverage=coverage)
+
+
 def test_logging_hits_and_misses(tmp_path, caplog):
     fetcher = FakeTimeseriesFetcher(cache=FileCache(base_dir=tmp_path), max_window_days=None)
     req = FakeRequest("LOG")
