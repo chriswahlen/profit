@@ -1,11 +1,29 @@
 """
-Lightweight, file-backed caching utilities used by fetchers.
+Caching and local storage utilities used by fetchers.
 
-The cache is intentionally simple and synchronous to keep it deterministic and
-easy to test. It can be swapped out later with a different backend by
-implementing the same interface.
+The default `FileCache` provides simple pickle-based persistence. `SqliteStore`
+offers a lightweight, queryable store that feels closer to Parquet while
+remaining dependency-light.
 """
 
+from .columnar_store import (
+    ColumnarSqliteStore,
+    ColumnarStoreError,
+    SeriesNotFoundError,
+    SliceCorruptionError,
+)
 from .file_cache import CacheMissError, FileCache, OfflineModeError
+from .sqlite_store import DatasetNotFoundError, SchemaError, SqliteStore
 
-__all__ = ["CacheMissError", "FileCache", "OfflineModeError"]
+__all__ = [
+    "CacheMissError",
+    "ColumnarSqliteStore",
+    "ColumnarStoreError",
+    "SeriesNotFoundError",
+    "SliceCorruptionError",
+    "FileCache",
+    "OfflineModeError",
+    "DatasetNotFoundError",
+    "SchemaError",
+    "SqliteStore",
+]

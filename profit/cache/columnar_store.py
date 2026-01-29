@@ -1,0 +1,471 @@
+from __future__ import annotations
+
+import hashlib
+import math
+import sqlite3
+import struct
+import sys
+import zlib
+from array import array
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Optional
+
+from .file_cache import _default_cache_dir
+
+
+class ColumnarStoreError(RuntimeError):
+    """Base error for the columnar slice store."""
+
+
+class SeriesNotFoundError(KeyError):
+    """Raised when a series_id does not exist."""
+
+
+class SliceCorruptionError(ColumnarStoreError):
+    """Raised when slice payload verification fails."""
+
+
+def _default_db_path() -> Path:
+    # Share the same default cache root, but keep a dedicated filename so
+    # callers can delete/inspect columnar storage independently.
+    return _default_cache_dir() / "columnar.sqlite3"
+
+
+def _to_utc(ts: datetime) -> datetime:
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def _dt_to_us(ts: datetime) -> int:
+    ts = _to_utc(ts)
+    return int(ts.timestamp() * 1_000_000)
+
+
+def _us_to_dt(ts_us: int) -> datetime:
+    return datetime.fromtimestamp(ts_us / 1_000_000, tz=timezone.utc)
+
+
+@dataclass(frozen=True)
+class SeriesConfig:
+    series_id: int
+    instrument_id: str
+    dataset: str
+    field: str
+    step_us: int
+    grid_origin_ts_us: int
+    window_points: int
+    compression: str  # "none" | "zlib"
+    offsets_enabled: bool
+    checksum_enabled: bool
+    sentinel_f64: float  # decoded from sentinel_f64_bits; NaN is supported
+    sentinel_f64_bits: int
+
+
+class ColumnarSqliteStore:
+    """
+    Columnar-on-SQLite store for fixed-step f64 time series.
+
+    Storage model:
+    - Each series defines a fixed step, an origin timestamp, and a canonical
+      window size (`window_points`).
+    - Each slice row stores exactly one canonical window for one series:
+      `values[]` is a packed float64 array of length `window_points`.
+    - There are no NULLs. Missing points are represented by a sentinel value
+      (recommended: NaN).
+    - Writes are provided as timestamp/value pairs; the store loads the affected
+      canonical slices, overlays updates, and rewrites each slice atomically
+      (INSERT OR REPLACE).
+    """
+
+    def __init__(self, db_path: Optional[Path] = None) -> None:
+        self.db_path = Path(db_path) if db_path else _default_db_path()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._init_schema()
+
+    # Series -----------------------------------------------------------
+    def create_series(
+        self,
+        *,
+        instrument_id: str,
+        dataset: str,
+        field: str,
+        step_us: int,
+        grid_origin_ts_us: int,
+        window_points: int,
+        compression: str = "none",
+        offsets_enabled: bool = False,
+        checksum_enabled: bool = True,
+        sentinel_f64: float = float("nan"),
+    ) -> int:
+        if step_us <= 0:
+            raise ValueError("step_us must be > 0")
+        if window_points <= 0:
+            raise ValueError("window_points must be > 0")
+        if compression not in {"none", "zlib"}:
+            raise ValueError("compression must be 'none' or 'zlib'")
+
+        sentinel_bits = _f64_to_u64(sentinel_f64)
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO __col_series__ (
+                instrument_id,
+                dataset,
+                field,
+                step_us,
+                grid_origin_ts_us,
+                window_points,
+                compression,
+                offsets_enabled,
+                checksum_enabled,
+                sentinel_f64_bits
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                instrument_id,
+                dataset,
+                field,
+                int(step_us),
+                int(grid_origin_ts_us),
+                int(window_points),
+                compression,
+                1 if offsets_enabled else 0,
+                1 if checksum_enabled else 0,
+                int(sentinel_bits),
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def get_series(self, series_id: int) -> SeriesConfig:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                series_id,
+                instrument_id,
+                dataset,
+                field,
+                step_us,
+                grid_origin_ts_us,
+                window_points,
+                compression,
+                offsets_enabled,
+                checksum_enabled,
+                sentinel_f64_bits
+            FROM __col_series__
+            WHERE series_id = ?
+            """,
+            (int(series_id),),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise SeriesNotFoundError(series_id)
+        sentinel_bits = int(row[10])
+        sentinel_f64 = _u64_to_f64(sentinel_bits)
+        return SeriesConfig(
+            series_id=int(row[0]),
+            instrument_id=str(row[1]),
+            dataset=str(row[2]),
+            field=str(row[3]),
+            step_us=int(row[4]),
+            grid_origin_ts_us=int(row[5]),
+            window_points=int(row[6]),
+            compression=str(row[7]),
+            offsets_enabled=bool(row[8]),
+            checksum_enabled=bool(row[9]),
+            sentinel_f64=float(sentinel_f64),
+            sentinel_f64_bits=sentinel_bits,
+        )
+
+    # Writes -----------------------------------------------------------
+    def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
+        cfg = self.get_series(series_id)
+        grouped: dict[int, list[tuple[int, float]]] = {}
+        grouped_offsets: dict[int, list[tuple[int, int]]] = {}
+
+        for ts, value in points:
+            ts_us = _dt_to_us(ts)
+            if ts_us < cfg.grid_origin_ts_us:
+                raise ValueError("timestamp is before grid origin")
+
+            # Assign the point to the fixed-step bucket containing ts_us.
+            rel_us = ts_us - cfg.grid_origin_ts_us
+            idx = rel_us // cfg.step_us
+            if idx > 2**63 - 1:
+                raise ValueError("timestamp index overflow")
+
+            slice_start = (idx // cfg.window_points) * cfg.window_points
+            pos = int(idx - slice_start)
+            grouped.setdefault(int(slice_start), []).append((pos, float(value)))
+
+            if cfg.offsets_enabled:
+                nominal_ts_us = cfg.grid_origin_ts_us + int(idx) * cfg.step_us
+                delta_us = ts_us - nominal_ts_us
+                # Store offsets as int32 milliseconds; this comfortably covers offsets
+                # within a step (e.g., within a UTC day) without overflowing int32.
+                if delta_us % 1000 != 0:
+                    raise ValueError("offset requires millisecond alignment")
+                offset_ms = delta_us // 1000
+                if offset_ms < -(2**31) or offset_ms > (2**31 - 1):
+                    raise ValueError("offset_ms out of int32 range")
+                grouped_offsets.setdefault(int(slice_start), []).append((pos, int(offset_ms)))
+
+        for slice_start, updates in grouped.items():
+            values, offsets = self._load_or_init_slice(cfg, slice_start)
+            for pos, value in updates:
+                values[pos] = value  # Explicit sentinel overwrites are allowed.
+
+            if cfg.offsets_enabled:
+                off_updates = grouped_offsets.get(slice_start, [])
+                for pos, offset_us in off_updates:
+                    offsets[pos] = offset_us
+
+            self._store_slice(cfg, slice_start, values, offsets)
+
+    # Reads (minimal; primarily for tests and debugging) ----------------
+    def read_slice_values(self, series_id: int, slice_start_index: int) -> list[float]:
+        cfg = self.get_series(series_id)
+        values, _offsets = self._load_or_init_slice(cfg, slice_start_index, require_existing=True)
+        return list(values)
+
+    def read_points(
+        self,
+        series_id: int,
+        *,
+        start: datetime,
+        end: datetime,
+        include_sentinel: bool = True,
+    ) -> list[tuple[datetime, float]]:
+        cfg = self.get_series(series_id)
+        start_us = _dt_to_us(start)
+        end_us = _dt_to_us(end)
+        if start_us < cfg.grid_origin_ts_us or end_us < cfg.grid_origin_ts_us:
+            raise ValueError("timestamp is before grid origin")
+        if start_us > end_us:
+            raise ValueError("start must be <= end")
+
+        start_idx = (start_us - cfg.grid_origin_ts_us) // cfg.step_us
+        end_idx = (end_us - cfg.grid_origin_ts_us) // cfg.step_us
+        start_slice = (start_idx // cfg.window_points) * cfg.window_points
+        end_slice = (end_idx // cfg.window_points) * cfg.window_points
+
+        out: list[tuple[datetime, float]] = []
+        slice_start = int(start_slice)
+        while slice_start <= int(end_slice):
+            values, offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            for i in range(cfg.window_points):
+                idx = slice_start + i
+                if idx < int(start_idx) or idx > int(end_idx):
+                    continue
+                nominal_ts_us = cfg.grid_origin_ts_us + idx * cfg.step_us
+                ts_us = nominal_ts_us
+                if cfg.offsets_enabled:
+                    ts_us = nominal_ts_us + int(offsets[i]) * 1000
+                value = float(values[i])
+                if not include_sentinel and _is_sentinel(value, cfg.sentinel_f64):
+                    continue
+                out.append((_us_to_dt(ts_us), value))
+            slice_start += cfg.window_points
+        return out
+
+    # Internals --------------------------------------------------------
+    def _init_schema(self) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS __col_series__ (
+                series_id INTEGER PRIMARY KEY,
+                instrument_id TEXT NOT NULL,
+                dataset TEXT NOT NULL,
+                field TEXT NOT NULL,
+                step_us INTEGER NOT NULL,
+                grid_origin_ts_us INTEGER NOT NULL,
+                window_points INTEGER NOT NULL,
+                compression TEXT NOT NULL,
+                offsets_enabled INTEGER NOT NULL,
+                checksum_enabled INTEGER NOT NULL,
+                sentinel_f64_bits INTEGER NOT NULL,
+                UNIQUE (instrument_id, dataset, field, step_us)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS __col_slice__ (
+                series_id INTEGER NOT NULL,
+                start_index INTEGER NOT NULL,
+                values_blob BLOB NOT NULL,
+                offsets_blob BLOB NOT NULL,
+                checksum_blob BLOB NOT NULL,
+                PRIMARY KEY (series_id, start_index)
+            )
+            """
+        )
+        self._conn.commit()
+
+    def _load_or_init_slice(
+        self,
+        cfg: SeriesConfig,
+        slice_start_index: int,
+        *,
+        require_existing: bool = False,
+    ) -> tuple[array, array]:
+        if slice_start_index % cfg.window_points != 0:
+            raise ValueError("slice_start_index must be aligned to window_points")
+
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT values_blob, offsets_blob, checksum_blob
+            FROM __col_slice__
+            WHERE series_id = ? AND start_index = ?
+            """,
+            (int(cfg.series_id), int(slice_start_index)),
+        )
+        row = cur.fetchone()
+        if row is None:
+            if require_existing:
+                raise KeyError((cfg.series_id, slice_start_index))
+            values = _init_values(cfg.window_points, cfg.sentinel_f64)
+            offsets = _init_offsets(cfg.window_points)
+            return values, offsets
+
+        values_blob = bytes(row[0])
+        offsets_blob = bytes(row[1])
+        checksum_blob = bytes(row[2])
+
+        values_bytes = _decompress_if_needed(values_blob, cfg.compression)
+        offsets_bytes = _decompress_if_needed(offsets_blob, cfg.compression) if cfg.offsets_enabled else b""
+
+        if cfg.checksum_enabled:
+            expected = _slice_checksum(values_bytes, offsets_bytes)
+            if checksum_blob != expected:
+                raise SliceCorruptionError(
+                    f"Checksum mismatch for series_id={cfg.series_id} start_index={slice_start_index}"
+                )
+
+        values = _decode_f64(values_bytes, cfg.window_points)
+        offsets = _decode_i32(offsets_bytes, cfg.window_points) if cfg.offsets_enabled else _init_offsets(cfg.window_points)
+        return values, offsets
+
+    def _store_slice(self, cfg: SeriesConfig, slice_start_index: int, values: array, offsets: array) -> None:
+        if slice_start_index % cfg.window_points != 0:
+            raise ValueError("slice_start_index must be aligned to window_points")
+        if len(values) != cfg.window_points:
+            raise ValueError("values must match window_points")
+        if len(offsets) != cfg.window_points:
+            raise ValueError("offsets must match window_points")
+
+        values_bytes = _encode_f64(values)
+        offsets_bytes = _encode_i32(offsets) if cfg.offsets_enabled else b""
+
+        checksum = _slice_checksum(values_bytes, offsets_bytes) if cfg.checksum_enabled else b""
+        values_blob = _compress_if_needed(values_bytes, cfg.compression)
+        offsets_blob = _compress_if_needed(offsets_bytes, cfg.compression) if cfg.offsets_enabled else b""
+
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO __col_slice__ (series_id, start_index, values_blob, offsets_blob, checksum_blob)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                int(cfg.series_id),
+                int(slice_start_index),
+                sqlite3.Binary(values_blob),
+                sqlite3.Binary(offsets_blob),
+                sqlite3.Binary(checksum),
+            ),
+        )
+        self._conn.commit()
+
+
+def _is_sentinel(value: float, sentinel: float) -> bool:
+    if math.isnan(sentinel):
+        return math.isnan(value)
+    return value == sentinel
+
+
+def _init_values(n: int, sentinel: float) -> array:
+    values = array("d", [sentinel] * n)
+    return values
+
+
+def _init_offsets(n: int) -> array:
+    offsets = array("i", [0] * n)
+    return offsets
+
+
+def _encode_f64(values: array) -> bytes:
+    # Ensure stable little-endian encoding across platforms.
+    vals = array("d", values)
+    if sys.byteorder == "big":
+        vals.byteswap()
+    return vals.tobytes()
+
+
+def _decode_f64(buf: bytes, n: int) -> array:
+    vals = array("d")
+    vals.frombytes(buf)
+    if len(vals) != n:
+        raise ValueError("Decoded f64 array length mismatch")
+    if sys.byteorder == "big":
+        vals.byteswap()
+    return vals
+
+
+def _encode_i32(offsets: array) -> bytes:
+    offs = array("i", offsets)
+    if sys.byteorder == "big":
+        offs.byteswap()
+    return offs.tobytes()
+
+
+def _decode_i32(buf: bytes, n: int) -> array:
+    offs = array("i")
+    offs.frombytes(buf)
+    if len(offs) != n:
+        raise ValueError("Decoded i32 array length mismatch")
+    if sys.byteorder == "big":
+        offs.byteswap()
+    return offs
+
+
+def _compress_if_needed(buf: bytes, compression: str) -> bytes:
+    if not buf:
+        return b""
+    if compression == "none":
+        return buf
+    return zlib.compress(buf)
+
+
+def _decompress_if_needed(buf: bytes, compression: str) -> bytes:
+    if not buf:
+        return b""
+    if compression == "none":
+        return buf
+    return zlib.decompress(buf)
+
+
+def _slice_checksum(values_bytes: bytes, offsets_bytes: bytes) -> bytes:
+    h = hashlib.blake2b(digest_size=16)
+    h.update(values_bytes)
+    h.update(offsets_bytes)
+    return h.digest()
+
+
+def _f64_to_u64(value: float) -> int:
+    # sqlite3 treats NaN as NULL for REAL bindings; store sentinel as bits.
+    return int.from_bytes(struct.pack("<d", float(value)), "little", signed=False)
+
+
+def _u64_to_f64(bits: int) -> float:
+    return struct.unpack("<d", int(bits).to_bytes(8, "little", signed=False))[0]
