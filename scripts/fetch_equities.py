@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.cache.file_cache import _default_cache_dir
-from profit.config import ensure_profit_conf_loaded, get_data_root
+from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
 from profit.sources.equities import (
     ColumnarOhlcvConfig,
     ColumnarOhlcvWriter,
@@ -42,28 +41,12 @@ def _build_parser() -> ArgumentParser:
         help=f"Inclusive end date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=None,
-        help="Directory for yfinance cache (default: PROFIT_CACHE_* + '/fetcher')",
-    )
-    parser.add_argument(
-        "--store-path",
-        type=Path,
-        default=None,
-        help="Path to ColumnarSqliteStore (default: PROFIT_CACHE_* + '/columnar.sqlite3')",
-    )
-    parser.add_argument(
         "--read-fields",
         nargs="+",
         default=["close_raw"],
         help="Field names to read back after ingestion (default: close_raw)",
     )
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level (DEBUG, INFO, WARNING...). Default: INFO",
-    )
+    add_common_cli_args(parser, cache_help_subdir="fetcher", default_store_filename="columnar.sqlite3")
     return parser
 
 
@@ -123,20 +106,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         freq="1d",
     )
 
-    base_cache_dir = args.cache_dir or Path(
-        os.environ.get("PROFIT_CACHE_DIR")
-        or os.environ.get("PROFIT_CACHE_ROOT")
-        or _default_cache_dir()
-    )
-    base_cache_dir = Path(base_cache_dir)
+    base_cache_dir = Path(get_cache_root(args=args))
     base_cache_dir.mkdir(parents=True, exist_ok=True)
 
     yf_cache_dir = base_cache_dir / "yfinance"
     os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
     yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
-    store = ColumnarSqliteStore(db_path=store_path)
+    store = ColumnarSqliteStore(db_path=get_columnar_db_path(args=args))
     cfg = ColumnarOhlcvConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     cache = FileCache(base_dir=base_cache_dir / "fetcher")

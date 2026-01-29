@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.cache.file_cache import _default_cache_dir
-from profit.config import ensure_profit_conf_loaded, get_data_root
+from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
 from profit.sources.fx import (
     ColumnarFxConfig,
     ColumnarFxWriter,
@@ -46,27 +45,11 @@ def _build_parser() -> ArgumentParser:
         help=f"Inclusive end date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        default=None,
-        help="Directory for fetcher cache (default: PROFIT_CACHE_* + '/fx_fetcher')",
-    )
-    parser.add_argument(
-        "--store-path",
-        type=Path,
-        default=None,
-        help="Path to ColumnarSqliteStore (default: PROFIT_DATA_ROOT/columnar.sqlite3)",
-    )
-    parser.add_argument(
         "--read-back",
         action="store_true",
         help="Read back inserted rows and print them.",
     )
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level (DEBUG, INFO, WARNING...). Default: INFO",
-    )
+    add_common_cli_args(parser, cache_help_subdir="fx_fetcher", default_store_filename="columnar.sqlite3")
     return parser
 
 
@@ -87,12 +70,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     provider_code = args.provider_code or f"{args.base}{args.quote}=X"
 
-    base_cache_dir = Path(
-        args.cache_dir
-        or os.environ.get("PROFIT_CACHE_DIR")
-        or os.environ.get("PROFIT_CACHE_ROOT")
-        or _default_cache_dir()
-    )
+    base_cache_dir = Path(get_cache_root(args=args))
     base_cache_dir.mkdir(parents=True, exist_ok=True)
     yf_cache_dir = base_cache_dir / "yfinance"
     os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
@@ -105,8 +83,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         provider_code=provider_code,
     )
 
-    store_path = args.store_path or get_data_root() / "columnar.sqlite3"
-    store = ColumnarSqliteStore(store_path)
+    store = ColumnarSqliteStore(get_columnar_db_path(args=args))
     cfg = ColumnarFxConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     pair = f"{req.base_ccy}/{req.quote_ccy}"

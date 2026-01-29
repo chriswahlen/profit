@@ -14,8 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .file_cache import _default_cache_dir
-from profit.config import ensure_profit_conf_loaded, get_data_root
+from profit.config import ensure_profit_conf_loaded, get_data_root, get_cache_root
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ def _default_db_path() -> Path:
     data_root = get_data_root()
     if data_root:
         return Path(data_root) / "columnar.sqlite3"
-    return _default_cache_dir() / "columnar.sqlite3"
+    return get_cache_root() / "columnar.sqlite3"
 
 
 def _default_unfetched_bits(sentinel_bits: int) -> int:

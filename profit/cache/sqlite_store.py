@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
 
-from .file_cache import _default_cache_dir
+from profit.config import get_cache_root
 
 
 class SchemaError(ValueError):
@@ -38,7 +38,7 @@ def _quote(identifier: Identifier) -> str:
 
 
 def _default_db_path() -> Path:
-    return _default_cache_dir() / "cache.sqlite3"
+    return get_cache_root() / "cache.sqlite3"
 
 
 def _canonical_type(py_val: Any) -> str:
