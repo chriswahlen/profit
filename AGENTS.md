@@ -41,6 +41,8 @@ These guidelines define how changes should be made in this repository to keep th
 - Update README when adding a new subsystem, config knob, or workflow.
 - Prefer adding or updating a small example script when introducing a new feature that’s hard to test via unit tests alone.
 - Keep `docs/schema.md` in sync with any schema or data-model changes; treat it as canonical documentation for the global data plane.
+- For fetchers: when a source supports local coverage (e.g., columnar store), implement a coverage adapter in the fetcher itself and require the store at construction time. The  call sites (scripts/jobs) should just supply the store, not wire adapters manually.
+- Rely on BaseFetcher to handle backoff, retry, start/end date windowing, etc.
 
 ## When unsure
 - Ask for clarification on requirements (data source, schema expectations, performance constraints).
