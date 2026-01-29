@@ -49,4 +49,4 @@ class CatalogChecker:
                 self.refresher.refresh(provider, allow_network=self.allow_network, use_cache_only=self.use_cache_only)
                 row = self.store.get_instrument(provider, provider_code)
             if row is None:
-                raise RuntimeError(f"Instrument {provider}:{provider_code} not found in catalog after refresh")
+                raise RuntimeError(f"Instrument {provider}:{provider_code} not found in catalog (stale={stale})")
