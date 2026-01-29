@@ -28,16 +28,16 @@ def _parse_date(value: str) -> datetime:
 
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Fetch daily equity bars and store them in ColumnarSqliteStore.")
-    parser.add_argument("--ticker", "-t", required=True, help="Provider symbol (e.g., AAPL)")
+    parser.add_argument("--ticker", "-t", required=False, help="Provider symbol (e.g., AAPL)")
     parser.add_argument("--mic", default="XNAS", help="MIC/venue code for the instrument (used in internal ID)")
     parser.add_argument(
         "--start",
-        required=True,
+        required=False,
         help=f"Inclusive start date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
         "--end",
-        required=True,
+        required=False,
         help=f"Inclusive end date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
@@ -124,6 +124,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         if desc.notes:
             print(f"  notes      : {desc.notes}")
         return
+
+    for name in ("ticker", "start", "end"):
+        if getattr(args, name) is None:
+            parser.error(f"--{name} is required unless --describe is used")
 
     start = _parse_date(args.start)
     end = _parse_date(args.end)

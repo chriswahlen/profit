@@ -29,15 +29,15 @@ def _parse_date(value: str) -> datetime:
 
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Fetch daily commodity prices.")
-    parser.add_argument("--commodity", choices=sorted(INSTRUMENT_MAP.keys()), required=True, help="Commodity to fetch")
+    parser.add_argument("--commodity", choices=sorted(INSTRUMENT_MAP.keys()), required=False, help="Commodity to fetch")
     parser.add_argument(
         "--start",
-        required=True,
+        required=False,
         help=f"Inclusive start date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
         "--end",
-        required=True,
+        required=False,
         help=f"Inclusive end date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
@@ -121,6 +121,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         if desc.notes:
             print(f"  notes      : {desc.notes}")
         return
+
+    for name in ("commodity", "start", "end"):
+        if getattr(args, name) is None:
+            parser.error(f"--{name} is required unless --describe is used")
 
     start = _parse_date(args.start)
     end = _parse_date(args.end)

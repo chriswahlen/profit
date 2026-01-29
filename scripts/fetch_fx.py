@@ -27,8 +27,8 @@ def _parse_date(value: str) -> datetime:
 
 def _build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Fetch daily FX rates and store them in ColumnarSqliteStore.")
-    parser.add_argument("--base", required=True, help="Base currency (e.g., EUR)")
-    parser.add_argument("--quote", required=True, help="Quote currency (e.g., USD)")
+    parser.add_argument("--base", required=False, help="Base currency (e.g., EUR)")
+    parser.add_argument("--quote", required=False, help="Quote currency (e.g., USD)")
     parser.add_argument(
         "--provider-code",
         default=None,
@@ -36,12 +36,12 @@ def _build_parser() -> ArgumentParser:
     )
     parser.add_argument(
         "--start",
-        required=True,
+        required=False,
         help=f"Inclusive start date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
         "--end",
-        required=True,
+        required=False,
         help=f"Inclusive end date in {DATE_FMT_HELP} format (UTC)",
     )
     parser.add_argument(
@@ -92,6 +92,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         if desc.notes:
             print(f"  notes      : {desc.notes}")
         return
+
+    # Validate required args for fetch mode
+    for name in ("base", "quote", "start", "end"):
+        if getattr(args, name) is None:
+            parser.error(f"--{name} is required unless --describe is used")
 
     start = _parse_date(args.start)
     end = _parse_date(args.end)
