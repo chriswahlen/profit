@@ -83,7 +83,9 @@ class ColumnarSqliteStore:
     def __init__(self, db_path: Optional[Path] = None) -> None:
         self.db_path = Path(db_path) if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # Explicitly size the statement cache (default 128) to favor reuse of our
+        # hot statements in write/read paths.
+        self._conn = sqlite3.connect(self.db_path, cached_statements=256)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()

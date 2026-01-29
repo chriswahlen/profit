@@ -102,7 +102,12 @@ class SqliteStore:
     def __init__(self, db_path: Optional[Path] = None) -> None:
         self.db_path = Path(db_path) if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # Use SQLite's internal statement cache (default 128). Make it explicit so
+        # higher-throughput callers can tune it here if needed.
+        self._conn = sqlite3.connect(self.db_path, cached_statements=256)
+        # Favor concurrent readers and durability suited for cache-style workloads.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.row_factory = sqlite3.Row
         self._init_metadata()
 
