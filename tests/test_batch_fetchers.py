@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
-from profit.cache import ColumnarSqliteStore, FileCache
+from profit.cache import FileCache
 from profit.config import ProfitConfig
 from profit.sources.base_fetcher import BaseFetcher
-from profit.sources.equities import EquitiesDailyFetcher, EquityDailyBar, EquityDailyBarsRequest, YFinanceDailyBarsFetcher
+from profit.sources.batch_fetcher import BatchFetcher
 from profit.sources.errors import ThrottledError
-from profit.sources.fx import FxRatePoint, FxRequest, YFinanceFxDailyFetcher
-from profit.sources.types import LifecycleReader
+from profit.sources.types import Fingerprintable, LifecycleReader
 
 class _NoopCatalogChecker:
     def ensure_fresh(self, provider: str):
@@ -28,30 +28,42 @@ def _dt(y: int, m: int, d: int) -> datetime:
     return datetime(y, m, d, tzinfo=timezone.utc)
 
 
-class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
+@dataclass(frozen=True)
+class _DummyBar:
+    instrument_id: str
+    ts_utc: datetime
+    value: float
+    source: str
+    version: str
+    asof: datetime
+
+
+@dataclass(frozen=True)
+class _DummyBarsRequest(Fingerprintable):
+    instrument_id: str
+    provider: str
+    provider_code: str
+    interval: str
+
+    def fingerprint(self) -> str:
+        return f"{self.provider}:{self.provider_code}:{self.instrument_id}:{self.interval}"
+
+
+class _DummyBatchFetcher(BatchFetcher[_DummyBarsRequest, list[_DummyBar]]):
     def __init__(self, *args, **kwargs):
         cfg = kwargs.pop("cfg")
         super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg, **kwargs)
-        self.batch_calls: list[list[EquityDailyBarsRequest]] = []
+        self.batch_calls: list[list[_DummyBarsRequest]] = []
 
     def _fetch_timeseries_chunk_many(self, requests, start, end):
         self.batch_calls.append(list(requests))
         bars = {}
         for req in requests:
             bars[req] = [
-                EquityDailyBar(
+                _DummyBar(
                     instrument_id=req.instrument_id,
                     ts_utc=start,
-                    open_raw=1.0,
-                    high_raw=1.0,
-                    low_raw=1.0,
-                    close_raw=1.0,
-                    volume_raw=1.0,
-                    open_adj=1.0,
-                    high_adj=1.0,
-                    low_adj=1.0,
-                    close_adj=1.0,
-                    volume_adj=1.0,
+                    value=1.0,
                     source=req.provider,
                     version="v1",
                     asof=_dt(2026, 1, 1),
@@ -59,8 +71,18 @@ class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
             ]
         return bars
 
+    def _combine_chunks(self, chunks):
+        if not chunks:
+            return []
+        if len(chunks) == 1:
+            return chunks[0]
+        out = []
+        for chunk in chunks:
+            out.extend(chunk)
+        return out
 
-def test_equities_batch_fetcher_uses_single_batch_call(tmp_path):
+
+def test_batch_fetcher_uses_single_batch_call(tmp_path):
     cache = FileCache(base_dir=tmp_path)
     cfg = ProfitConfig(
         data_root=tmp_path,
@@ -69,10 +91,10 @@ def test_equities_batch_fetcher_uses_single_batch_call(tmp_path):
         log_level="INFO",
         refresh_catalog=False,
     )
-    fetcher = _FakeEquityBatchFetcher(cache=cache, max_window_days=None, cfg=cfg)
+    fetcher = _DummyBatchFetcher(cache=cache, cfg=cfg)
 
-    req_a = EquityDailyBarsRequest("AAA|XNAS", "yfinance", "AAA", "1d")
-    req_b = EquityDailyBarsRequest("BBB|XNAS", "yfinance", "BBB", "1d")
+    req_a = _DummyBarsRequest("AAA|XNAS", "provider", "AAA", "1d")
+    req_b = _DummyBarsRequest("BBB|XNAS", "provider", "BBB", "1d")
 
     results = fetcher.timeseries_fetch_many([req_a, req_b], _dt(2020, 1, 1), _dt(2020, 1, 1))
 
@@ -83,11 +105,11 @@ def test_equities_batch_fetcher_uses_single_batch_call(tmp_path):
     assert ids == {"AAA|XNAS", "BBB|XNAS"}
 
 
-@dataclass(frozen=True)
-class _SimpleRequest:
-    key: str
-    provider: str = "test"
-    provider_code: str = "TEST"
+class _SimpleRequest(Fingerprintable):
+    def __init__(self, key: str, provider: str = "test", provider_code: str = "TEST") -> None:
+        self.key = key
+        self.provider = provider
+        self.provider_code = provider_code
 
     def fingerprint(self) -> str:
         return self.key
@@ -139,106 +161,7 @@ def test_timeseries_fetch_many_retries_on_throttle(tmp_path):
     assert fetcher.attempts == 2
     assert result == [["ok-r1"]]
     assert sleeps  # should have slept once on throttle
-
-
-def test_yfinance_equities_chunk_delegates_to_batch(tmp_path):
-    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
-    cache = FileCache(base_dir=tmp_path / "cache_eq")
-    cfg = ProfitConfig(
-        data_root=tmp_path,
-        cache_root=tmp_path,
-        store_path=tmp_path / "col.sqlite3",
-        log_level="INFO",
-        refresh_catalog=False,
-    )
-    fetcher = YFinanceDailyBarsFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg)
-
-    called = {}
-
-    def fake_batch(reqs, start, end):
-        called["reqs"] = reqs
-        req = reqs[0]
-        return {
-            req: [
-                EquityDailyBar(
-                    instrument_id=req.instrument_id,
-                    ts_utc=start,
-                    open_raw=1,
-                    high_raw=1,
-                    low_raw=1,
-                    close_raw=1,
-                    volume_raw=1,
-                    open_adj=1,
-                    high_adj=1,
-                    low_adj=1,
-                    close_adj=1,
-                    volume_adj=1,
-                    source=req.provider,
-                    version="v1",
-                    asof=_dt(2026, 1, 1),
-                )
-            ]
-        }
-
-    fetcher._fetch_timeseries_chunk_many = fake_batch  # type: ignore[assignment]
-
-    req = EquityDailyBarsRequest("AAA|XNAS", "yfinance", "AAA", "1d")
-    bars = fetcher._fetch_timeseries_chunk_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1)).get(req, [])
-
-    assert called["reqs"] == [req]
-    assert len(bars) == 1
-    assert bars[0].instrument_id == "AAA|XNAS"
-
-
-def test_yfinance_fx_chunk_delegates_to_batch(tmp_path):
-    store = ColumnarSqliteStore(tmp_path / "col_fx.sqlite3")
-    cache = FileCache(base_dir=tmp_path / "cache_fx")
-    cfg = ProfitConfig(
-        data_root=tmp_path,
-        cache_root=tmp_path,
-        store_path=tmp_path / "col_fx.sqlite3",
-        log_level="INFO",
-        refresh_catalog=False,
-    )
-    fetcher = YFinanceFxDailyFetcher(
-        store=store,
-        cache=cache,
-        max_window_days=None,
-        lifecycle=_AlwaysActiveLifecycle(),
-        catalog_checker=_NoopCatalogChecker(),
-        cfg=cfg,
-    )
-
-    called = {}
-
-    def fake_batch(reqs, start, end):
-        called["reqs"] = reqs
-        req = reqs[0]
-        return {
-            req: [
-                FxRatePoint(
-                    base_ccy=req.base_ccy,
-                    quote_ccy=req.quote_ccy,
-                    ts_utc=start,
-                    rate=1.23,
-                    source="yfinance",
-                    version="v1",
-                    asof=_dt(2026, 1, 1),
-                )
-            ]
-        }
-
-    fetcher._fetch_timeseries_chunk_many = fake_batch  # type: ignore[assignment]
-
-    req = FxRequest("EUR", "USD", "yfinance", "EURUSD=X", "1d")
-    pts = fetcher._fetch_timeseries_chunk_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1)).get(req, [])
-
-    assert called["reqs"] == [req]
-    assert len(pts) == 1
-    assert pts[0].rate == 1.23
-
-
-def test_lifecycle_clipping_batches_by_window():
+def test_lifecycle_clipping_batches_by_window(tmp_path):
     # One symbol active full window, one delisted mid-window.
     class _Req:
         def __init__(self, instrument_id, provider, provider_code):
@@ -269,7 +192,18 @@ def test_lifecycle_clipping_batches_by_window():
         ("p", "FULL"): (datetime(1900, 1, 1, tzinfo=timezone.utc), None),
         ("p", "CUT"): (datetime(1900, 1, 1, tzinfo=timezone.utc), datetime(2020, 1, 15, tzinfo=timezone.utc)),
     }
-    fetcher = _Fetcher(cache=None, lifecycle=_MapLifecycle(lifecycles))
+    fetcher = _Fetcher(
+        cache=FileCache(base_dir=tmp_path / "cache"),
+        lifecycle=_MapLifecycle(lifecycles),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=ProfitConfig(
+            data_root=tmp_path,
+            cache_root=tmp_path,
+            store_path=tmp_path / "col.sqlite3",
+            log_level="INFO",
+            refresh_catalog=False,
+        ),
+    )
     req_full = _Req("FULL|X", "p", "FULL")
     req_cut = _Req("CUT|X", "p", "CUT")
 

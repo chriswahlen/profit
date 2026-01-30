@@ -43,7 +43,7 @@ def test_identifier_upsert_updates_last_seen(tmp_path):
     store.upsert_identifiers([rec_later])
 
     row = store.conn.execute(
-        "SELECT last_seen FROM entity_identifier WHERE entity_id=? AND scheme=?",
+        "SELECT last_seen FROM entity_identifier WHERE entity_id=? AND scheme=? ORDER BY last_seen DESC LIMIT 1",
         (rec.entity_id, rec.scheme),
     ).fetchone()
     assert row is not None

@@ -4,14 +4,40 @@ import os
 import pytest
 
 from profit.cache import FileCache, OfflineModeError
+from profit.config import ProfitConfig
 from profit.sources.base_fetcher import BaseFetcher
 from profit.sources.batch_fetcher import BatchFetcher
-from profit.sources.types import Fingerprintable
+from profit.sources.types import Fingerprintable, LifecycleReader
+
+
+class _AlwaysActiveLifecycle(LifecycleReader):
+    def get_lifecycle(self, provider: str, provider_code: str):
+        return datetime(1900, 1, 1, tzinfo=timezone.utc), None
+
+
+class _NoopCatalogChecker:
+    def ensure_fresh(self, provider: str):
+        return
+
+    def require_present(self, provider: str, provider_code: str):
+        return
+
+
+def _cfg(base):
+    return ProfitConfig(
+        data_root=base,
+        cache_root=base,
+        store_path=base / "col.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
 
 
 class FakeRequest(Fingerprintable):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, provider: str = "p", provider_code: str = "PC") -> None:
         self.code = code
+        self.provider = provider
+        self.provider_code = provider_code
 
     def fingerprint(self) -> str:  # pragma: no cover - trivial
         return f"fake:{self.code}"
@@ -44,7 +70,13 @@ class FakeBatchFetcher(BatchFetcher[FakeRequest, int]):
 
 
 def test_chunking_and_cache_hit(tmp_path):
-    fetcher = FakeTimeseriesFetcher(cache=FileCache(base_dir=tmp_path), max_window_days=30)
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path),
+        max_window_days=30,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
+    )
     req = FakeRequest("ABC")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start + timedelta(days=60)
@@ -63,6 +95,9 @@ def test_offline_cache_miss_raises(tmp_path):
         cache=FileCache(base_dir=tmp_path),
         offline=True,
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("MISS")
     start = datetime(2021, 1, 1, tzinfo=timezone.utc)
@@ -74,7 +109,13 @@ def test_offline_cache_miss_raises(tmp_path):
 
 def test_expired_cache_triggers_refetch(tmp_path):
     cache = FileCache(base_dir=tmp_path, ttl=timedelta(days=1))
-    fetcher = FakeTimeseriesFetcher(cache=cache, max_window_days=None)
+    fetcher = FakeTimeseriesFetcher(
+        cache=cache,
+        max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
+    )
     req = FakeRequest("TTL")
     start = datetime(2022, 6, 1, tzinfo=timezone.utc)
     end = start
@@ -94,7 +135,12 @@ def test_expired_cache_triggers_refetch(tmp_path):
 
 
 def test_batch_fetcher_caches_bulk_download(tmp_path):
-    batch = FakeBatchFetcher(cache=FileCache(base_dir=tmp_path))
+    batch = FakeBatchFetcher(
+        cache=FileCache(base_dir=tmp_path),
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
+    )
     req = FakeRequest("BULK")
 
     first = batch.fetch(req)
@@ -105,7 +151,13 @@ def test_batch_fetcher_caches_bulk_download(tmp_path):
     assert second == 1
     assert batch.counter == 1  # reused cache
 
-    offline = FakeBatchFetcher(cache=batch.cache, offline=True)
+    offline = FakeBatchFetcher(
+        cache=batch.cache,
+        offline=True,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
+    )
     with pytest.raises(OfflineModeError):
         offline.fetch(FakeRequest("NEW"))
 
@@ -125,10 +177,13 @@ class DummyCoverageAdapter:
         return self.result
 
 
-def test_timeseries_fetch_skips_when_coverage_complete():
+def test_timeseries_fetch_skips_when_coverage_complete(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=None),  # in-memory path
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("SKIP")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -145,6 +200,9 @@ def test_timeseries_fetch_uses_network_when_gaps_exist(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("GAPS")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -161,6 +219,9 @@ def test_timeseries_fetch_chunks_with_coverage(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=30,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("CHUNK")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -186,6 +247,9 @@ def test_timeseries_fetch_uses_cache_for_some_gaps(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=30,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("CACHE")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -218,6 +282,9 @@ def test_timeseries_fetch_offline_with_gaps_raises(tmp_path):
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=None,
         offline=True,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("OFFLINE")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -242,6 +309,9 @@ def test_timeseries_fetch_retry_with_coverage(tmp_path):
     fetcher = RetryFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("RETRY")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -256,6 +326,9 @@ def test_timeseries_fetch_complete_but_empty_returns_store(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("EMPTY")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -269,6 +342,9 @@ def test_timeseries_fetch_malformed_gap(tmp_path):
     fetcher = FakeTimeseriesFetcher(
         cache=FileCache(base_dir=tmp_path / "cache"),
         max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
     )
     req = FakeRequest("BADGAP")
     start = datetime(2020, 1, 2, tzinfo=timezone.utc)
@@ -284,7 +360,13 @@ def test_timeseries_fetch_malformed_gap(tmp_path):
 
 
 def test_logging_hits_and_misses(tmp_path, caplog):
-    fetcher = FakeTimeseriesFetcher(cache=FileCache(base_dir=tmp_path), max_window_days=None)
+    fetcher = FakeTimeseriesFetcher(
+        cache=FileCache(base_dir=tmp_path),
+        max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=_cfg(tmp_path),
+    )
     req = FakeRequest("LOG")
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = start
