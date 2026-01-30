@@ -27,7 +27,7 @@ def _build_parser() -> ArgumentParser:
     )
     p.add_argument(
         "--forms",
-        default="10-K,10-K/A,10-Q,10-Q/A,20-F,20-F/A,40-F,40-F/A",
+        default="10-K,10-K/A,10-Q,10-Q/A,20-F,20-F/A,40-F,40-F/A,8-K,8-K/A",
         help="Comma-separated form types to include.",
     )
     p.add_argument(

@@ -10,6 +10,7 @@ The goal is to make fundamentals **provider-neutral, globally identifiable, and 
 - Forms included:
   - Annual: `10-K`, `10-K/A`, `20-F`, `20-F/A`, `40-F`, `40-F/A`
   - Quarterly: `10-Q`, `10-Q/A`
+  - Current reports: `8-K`, `8-K/A` (may be sparse for fundamentals; included for potential corporate-action signals)
 - Facts included:
   - Numeric facts (stored as `REAL`)
   - Text facts (stored as gzipped blob with a preview)
