@@ -110,11 +110,21 @@ class SecCompanyTickerSeeder:
                 ]
             )
 
-        entities_written = store.upsert_entities(entities)
-        identifiers_written = store.upsert_identifiers(identifiers)
+        # Batch in a single fast transaction with lowered sync for speed.
+        conn = store.conn
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            entities_written = store.upsert_entities(entities)
+            identifiers_written = store.upsert_identifiers(identifiers)
+            tombstoned = self._tombstone_missing_tickers(store, current_tickers)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA synchronous=NORMAL")
 
-        # Tombstone missing tickers: mark active_to when ticker disappears from latest snapshot.
-        tombstoned = self._tombstone_missing_tickers(store, current_tickers)
         return SeedResult(entities_written=entities_written, identifiers_written=identifiers_written + tombstoned)
 
     def _tombstone_missing_tickers(self, store: EntityStore, current: set[tuple[str, str]]) -> int:
