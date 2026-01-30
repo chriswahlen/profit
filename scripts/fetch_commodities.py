@@ -105,7 +105,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_window_days=None,
         catalog_path=store_path,
         allow_network=True,
-        refresh_catalog=cfg.refresh_catalog,
     )
 
     # Inject store for coverage adapter

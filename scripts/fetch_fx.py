@@ -94,7 +94,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         cache_root=base_cache_dir,
         allow_network=True,
         include_etf=True,
-        refresh_catalog=cfg.refresh_catalog,
     )
 
     if args.describe:
