@@ -9,6 +9,7 @@ from profit.cache import ColumnarSqliteStore, FileCache
 from profit.config import ProfitConfig, ensure_profit_conf_loaded, add_common_cli_args, apply_runtime_env
 from profit.sources.commodities.base import CommodityDailyRequest
 from profit.sources.commodities.columnar import ColumnarCommodityConfig, DAY_US
+from scripts.print_utils import print_points
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -146,19 +147,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     fetcher.timeseries_fetch_many([request], start, end)
 
     if args.read_back:
-        series_id = store.get_series_id(
-            instrument_id=request.instrument_id,
-            dataset=dataset,
-            field="price",
-            step_us=DAY_US,
-        )
-        if series_id is None:
-            print("No series found for read-back.")
-            return
-        pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
-        print(f"Read back {len(pts)} points:")
-        for ts, price in pts:
-            print(f"  {ts.date().isoformat()} price={price}")
+        print_points(store, dataset, request.instrument_id, ["price"], start, end, step_us=DAY_US)
 
 
 if __name__ == "__main__":

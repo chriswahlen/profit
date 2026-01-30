@@ -14,6 +14,7 @@ from profit.sources.equities import (
     EquityDailyBarsRequest,
     YFinanceDailyBarsFetcher,
 )
+from scripts.print_utils import print_points
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -54,39 +55,6 @@ def _build_parser() -> ArgumentParser:
         cache_help_subdir="fetcher",
     )
     return parser
-
-
-def _print_points(
-    store: ColumnarSqliteStore,
-    dataset: str,
-    instrument_id: str,
-    field: str,
-    start: datetime,
-    end: datetime,
-) -> None:
-    series_id = store.get_series_id(
-        instrument_id=instrument_id,
-        dataset=dataset,
-        field=field,
-        step_us=DAY_US,
-    )
-    if series_id is None:
-        print(f"No series for {field} (dataset={dataset})")
-        return
-
-    points = store.read_points(
-        series_id,
-        start=start,
-        end=end,
-        include_sentinel=False,
-    )
-    if not points:
-        print(f"No points for {field} in requested window.")
-        return
-
-    print(f"Stored {len(points)} points for {field}:")
-    for ts, value in points:
-        print(f"  {ts.date().isoformat()} {value:.6f}")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -152,8 +120,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"Ensuring coverage for {args.ticker} {start.date()} → {end.date()} via yfinance...")
     fetcher.timeseries_fetch_many([request], start, end)
 
-    for field in args.read_fields:
-        _print_points(store, dataset, request.instrument_id, field, start, end)
+    print_points(store, dataset, request.instrument_id, args.read_fields, start, end, step_us=DAY_US)
 
 
 if __name__ == "__main__":

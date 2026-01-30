@@ -18,6 +18,7 @@ from profit.sources.fx import (
     FxRequest,
     YFinanceFxDailyFetcher,
 )
+from scripts.print_utils import print_points
 
 
 DATE_FMT = "%Y-%m-%d"
@@ -134,19 +135,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     fetcher.timeseries_fetch_many([req], start, end)
 
     if args.read_back:
-        series_id = store.get_series_id(
-            instrument_id=pair,
-            dataset=dataset,
-            field="rate",
-            step_us=DAY_US,
-        )
-        if series_id is None:
-            print("No series found for read-back.")
-            return
-        pts = store.read_points(series_id, start=start, end=end, include_sentinel=False)
-        print(f"Read back {len(pts)} points:")
-        for ts, rate in pts:
-            print(f"  {ts.date().isoformat()} rate={rate}")
+        print_points(store, dataset, pair, ["rate"], start, end, step_us=DAY_US)
 
 
 if __name__ == "__main__":
