@@ -8,14 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
-from urllib.error import URLError
 import zipfile
 import io
 
-from profit.cache import FileCache, SqliteStore
+from profit.cache import FileCache, OfflineModeError, SqliteStore
 from profit.cache.file_cache import CacheMissError
+from profit.utils.url_fetcher import PermanentFetchError, TemporaryFetchError, fetch_url
 from profit.catalog.lifecycle import CatalogLifecycleReader
 from profit.catalog.refresher import CatalogChecker
 from profit.catalog.store import CatalogStore
@@ -157,9 +155,9 @@ class SecEdgarFundamentalsFetcher(BaseFetcher[FundamentalsRequest, list[FactRow]
             url = f"https://data.sec.gov/Archives/edgar/data/{cik_no_lead}/{filing.accession}/{acc_dash}-xbrl.json"
             logger.info("sec fundamentals: fetch xbrl json accession=%s url=%s", filing.accession, url)
             try:
-                raw = _http_get(url, edgar_cfg=edgar_cfg)
-            except HTTPError as exc:
-                if exc.code == 404:
+                raw = _http_get(url, edgar_cfg=edgar_cfg, cache=cache, allow_network=self._allow_network)
+            except PermanentFetchError as exc:
+                if exc.status == 404:
                     logger.warning("sec fundamentals: xbrl json missing accession=%s url=%s", filing.accession, url)
                     return _fallback_zip_or_companyfacts(filing, edgar_cfg, cache, self._allow_network)
                 raise
@@ -192,24 +190,33 @@ class SecEdgarFundamentalsFetcher(BaseFetcher[FundamentalsRequest, list[FactRow]
 # --- helpers -----------------------------------------------------------
 
 
-def _http_get(url: str, *, edgar_cfg: SecEdgarConfig) -> bytes:
+def _http_get(
+    url: str,
+    *,
+    edgar_cfg: SecEdgarConfig,
+    cache: FileCache | None = None,
+    allow_network: bool = True,
+) -> bytes:
+    if cache is None:
+        cache = FileCache(ttl=edgar_cfg.cache_ttl)
     headers = {"User-Agent": edgar_cfg.user_agent}
     if edgar_cfg.email:
         headers["From"] = edgar_cfg.email
-    req = Request(url, headers=headers)
     try:
-        with urlopen(req) as resp:
-            return resp.read()
-    except HTTPError as exc:
-        # Let caller handle 404/429/etc.
+        return fetch_url(
+            url,
+            cache=cache,
+            ttl=edgar_cfg.cache_ttl,
+            allow_network=allow_network and edgar_cfg.allow_network,
+            timeout=30.0,
+            headers=headers,
+        )
+    except PermanentFetchError:
         raise
-    except URLError as exc:
+    except TemporaryFetchError as exc:
+        raise ThrottledError("SEC HTTP temporary", retry_after=None) from exc
+    except OfflineModeError as exc:
         raise RuntimeError(f"Network unavailable for SEC request: {url}") from exc
-    except Exception as exc:
-        status = getattr(exc, "code", None)
-        if status == 429:
-            raise ThrottledError("SEC HTTP 429", retry_after=None) from exc
-        raise
 
 
 class _NoopRefresher:
@@ -258,7 +265,7 @@ def _fallback_companyfacts(filing: FilingRow, edgar_cfg: SecEdgarConfig, cache: 
             return []
         url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{filing.provider_code}.json"
         logger.info("sec fundamentals: fetch companyfacts cik=%s url=%s", filing.provider_code, url)
-        raw = _http_get(url, edgar_cfg=edgar_cfg)
+        raw = _http_get(url, edgar_cfg=edgar_cfg, cache=cache, allow_network=allow_network)
         try:
             cache.set(key, raw)
         except Exception:
@@ -429,7 +436,7 @@ def _maybe_fetch_zip(
     index_url = f"https://data.sec.gov/Archives/edgar/data/{cik_no_lead}/{filing.accession}/index.json"
     logger.info("sec fundamentals: fetch index json accession=%s url=%s", filing.accession, index_url)
     try:
-        idx_raw = _http_get(index_url, edgar_cfg=edgar_cfg)
+        idx_raw = _http_get(index_url, edgar_cfg=edgar_cfg, cache=cache, allow_network=allow_network)
         idx = json.loads(idx_raw)
         files = idx.get("directory", {}).get("item", [])
         zip_name = None
@@ -443,14 +450,14 @@ def _maybe_fetch_zip(
             return None
         zip_url = f"https://data.sec.gov/Archives/edgar/data/{cik_no_lead}/{filing.accession}/{zip_name}"
         logger.info("sec fundamentals: fetch xbrl zip accession=%s url=%s", filing.accession, zip_url)
-        zip_bytes = _http_get(zip_url, edgar_cfg=edgar_cfg)
+        zip_bytes = _http_get(zip_url, edgar_cfg=edgar_cfg, cache=cache, allow_network=allow_network)
         try:
             cache.set(key, zip_bytes)
         except Exception:
             pass
         return zip_bytes
-    except HTTPError as exc:
-        if exc.code == 404:
+    except PermanentFetchError as exc:
+        if exc.status == 404:
             logger.info("sec fundamentals: index.json not found accession=%s", filing.accession)
             return None
         raise
@@ -609,7 +616,7 @@ def _load_submissions(cik: str, edgar_cfg: SecEdgarConfig, cache: FileCache | No
             raise RuntimeError("network disabled and submissions not cached")
         url = f"{edgar_cfg.submissions_base}CIK{cik}.json"
         logger.info("sec fetch submissions cik=%s url=%s", cik, url)
-        data = _http_get(url, edgar_cfg=edgar_cfg)
+        data = _http_get(url, edgar_cfg=edgar_cfg, cache=cache, allow_network=allow_network)
         try:
             cache.set(key, data)
         except Exception:
@@ -631,7 +638,7 @@ def _load_submissions_file(name: str, edgar_cfg: SecEdgarConfig, cache: FileCach
             raise RuntimeError("network disabled and submissions file not cached")
         url = f"{edgar_cfg.submissions_base}{name}"
         logger.info("sec fetch submissions file name=%s url=%s", name, url)
-        data = _http_get(url, edgar_cfg=edgar_cfg)
+        data = _http_get(url, edgar_cfg=edgar_cfg, cache=cache, allow_network=allow_network)
         try:
             cache.set(key, data)
         except Exception:

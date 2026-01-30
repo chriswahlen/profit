@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from argparse import ArgumentParser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 import os
-import requests
+
+from profit.cache import FileCache
+from profit.utils.url_fetcher import fetch_url
 
 from profit.catalog import CatalogService, CatalogStore, InstrumentRecord
 from profit.config import ensure_profit_conf_loaded, get_columnar_db_path
@@ -255,9 +258,8 @@ def load_sec_company_tickers(_args, store: CatalogStore) -> int:
     """
     url = "https://www.sec.gov/files/company_tickers.json"
     ua = _user_agent()
-    resp = requests.get(url, headers={"User-Agent": ua})
-    resp.raise_for_status()
-    data = resp.json()
+    raw = fetch_url(url, cache=FileCache(), headers={"User-Agent": ua}, timeout=30)
+    data = json.loads(raw)
     # The JSON is a dict keyed by integer index: {"0":{"cik_str":..., "ticker":..., "title":...}, ...}
     rows: list[InstrumentRecord] = []
     now = _now()

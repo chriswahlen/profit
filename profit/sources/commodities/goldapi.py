@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List
 
-import requests
+from profit.cache import FileCache
+from profit.utils.url_fetcher import PermanentFetchError, TemporaryFetchError, fetch_url
 
 from profit.catalog import FetcherDescription
 from profit.catalog.lifecycle import CatalogLifecycleReader
@@ -84,6 +86,7 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
         self.api_key = api_key or os.getenv("GOLDAPI_API_KEY")
         if not self.api_key:
             raise ValueError("GoldAPI API key is required (set GOLDAPI_API_KEY or pass api_key)")
+        self._fetch_cache = FileCache()
 
     def coverage_adapter(self, request: CommodityDailyRequest):
         from profit.sources.commodities.coverage_adapter import CommoditiesCoverageAdapter
@@ -141,20 +144,16 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
         symbol = request.provider_code  # expect e.g., XAU or XAG
         url = f"{self.base_url}/{symbol}/USD/{day.isoformat()}"
         headers = {"x-access-token": self.api_key}
-        logger.info("goldapi request url=%s day=%s", url, day)
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
-        except requests.exceptions.RequestException as exc:
-            logger.warning("goldapi request failed symbol=%s day=%s err=%s", symbol, day, exc)
-            return None
-        if resp.status_code == 429:
-            raise ThrottledError("goldapi HTTP 429", retry_after=60.0)
-        if resp.status_code >= 500:
-            raise ThrottledError(f"goldapi {resp.status_code}", retry_after=60.0)
-        if resp.status_code == 401:
-            raise ValueError("goldapi unauthorized: check API key")
-        resp.raise_for_status()
-        data = resp.json()
+            raw = fetch_url(url, cache=self._fetch_cache, headers=headers, timeout=30)
+        except TemporaryFetchError as exc:
+            raise ThrottledError("goldapi HTTP 429/5xx", retry_after=60.0) from exc
+        except PermanentFetchError as exc:
+            if exc.status == 401:
+                raise ValueError("goldapi unauthorized: check API key") from exc
+            raise
+
+        data = json.loads(raw)
 
         # goldapi returns price under various keys; prefer 'price'
         price_val = None

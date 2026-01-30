@@ -6,7 +6,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
+from profit.cache import FileCache
+from profit.utils.url_fetcher import fetch_url
 
 from profit.catalog.store import CatalogStore
 from profit.catalog.types import InstrumentRecord
@@ -36,6 +37,7 @@ class SecCompanyTickersRefresher:
 
     def __init__(self, store: CatalogStore) -> None:
         self.store = store
+        self._cache = FileCache()
 
     def refresh(self, provider: str, *, allow_network: bool, use_cache_only: bool = False) -> None:
         if provider != "sec":
@@ -47,9 +49,8 @@ class SecCompanyTickersRefresher:
         url = "https://www.sec.gov/files/company_tickers.json"
         ua = _user_agent()
         logger.info("sec catalog: download company_tickers.json url=%s", url)
-        resp = requests.get(url, headers={"User-Agent": ua}, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        raw = fetch_url(url, cache=self._cache, headers={"User-Agent": ua}, timeout=30)
+        data = json.loads(raw)
         rows: list[InstrumentRecord] = []
         now = _now()
         for entry in data.values():

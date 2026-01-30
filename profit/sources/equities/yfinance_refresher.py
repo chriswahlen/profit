@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-import requests
 import logging
+
+from profit.cache import FileCache
+from profit.utils.url_fetcher import fetch_url
 
 from profit.catalog.refresher import CatalogRefresher
 from profit.catalog.store import CatalogStore
@@ -29,6 +31,7 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         self.default_mic = default_mic
         self.default_currency = default_currency
         self.grace_days = grace_days
+        self._fetch_cache = FileCache(base_dir=cache_root / "urlfetch")
 
     def refresh(self, provider: str, *, allow_network: bool, use_cache_only: bool = False) -> None:
         if provider != "yfinance":
@@ -90,27 +93,15 @@ class YFinanceEquitiesRefresher(CatalogRefresher):
         if not dest.exists() and not allow_network:
             raise RuntimeError(f"Catalog refresh needs network to fetch {url}")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("catalog download url=%s dest=%s", url, dest)
-        if url.startswith("ftp://"):
-            import urllib.request
-
-            with urllib.request.urlopen(url) as resp:  # type: ignore
-                content = resp.read()
-            dest.write_bytes(content)
-            return dest
-
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        # Basic guard against HTML/error payloads.
-        if resp.content.strip().startswith(b"<"):
+        payload = fetch_url(url, cache=self._fetch_cache, allow_network=allow_network, timeout=30)
+        if payload.strip().startswith(b"<"):
             logger.warning(
-                "catalog download unexpected HTML url=%s status=%s headers=%s",
+                "catalog download unexpected HTML url=%s size=%s",
                 url,
-                resp.status_code,
-                dict(resp.headers),
+                len(payload),
             )
             raise RuntimeError(f"Unexpected HTML response for {url}")
-        dest.write_bytes(resp.content)
+        dest.write_bytes(payload)
         return dest
 
     def _parse_symbol_file(self, path: Path, sym_col: str) -> list[str]:
