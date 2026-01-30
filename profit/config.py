@@ -172,13 +172,26 @@ class ProfitConfig:
         )
 
 
-def apply_runtime_env(cfg: ProfitConfig) -> None:
-    """
-    Apply common runtime environment variables based on resolved config.
-    """
-    if cfg.refresh_catalog:
-        os.environ["PROFIT_REFRESH_CATALOG"] = "1"
+    def apply_runtime_env(cfg: ProfitConfig) -> None:
+        """
+        Apply common runtime environment variables based on resolved config.
+        """
+        if cfg.refresh_catalog:
+            os.environ["PROFIT_REFRESH_CATALOG"] = "1"
 
-    yf_cache_dir = cfg.cache_root / "yfinance"
-    os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
-    yf_cache_dir.mkdir(parents=True, exist_ok=True)
+        yf_cache_dir = cfg.cache_root / "yfinance"
+        os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
+        yf_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Convenience helpers so callers can avoid global functions.
+    @staticmethod
+    def resolve_data_root() -> Path:
+        return get_data_root()
+
+    @staticmethod
+    def resolve_cache_root(*, args=None) -> Path:
+        return get_cache_root(args=args)
+
+    @staticmethod
+    def resolve_columnar_db_path(*, args=None, filename: str = "columnar.sqlite3") -> Path:
+        return get_columnar_db_path(args=args, filename=filename)

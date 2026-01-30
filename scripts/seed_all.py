@@ -8,7 +8,7 @@ from datetime import timedelta
 from profit.cache import FileCache
 from profit.catalog import EntityStore
 from profit.catalog.seeders import SecCompanyTickerSeeder
-from profit.config import get_cache_root, get_data_root
+from profit.config import ProfitConfig
 
 
 def seed_sec(store: EntityStore, cache: FileCache, offline: bool, ttl_days: int) -> None:
@@ -36,8 +36,8 @@ def main() -> None:
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
 
-    data_root = args.data_root or get_data_root()
-    cache_root = args.cache_root or get_cache_root()
+    data_root = args.data_root or ProfitConfig.resolve_data_root()
+    cache_root = args.cache_root or ProfitConfig.resolve_cache_root()
 
     store = EntityStore(data_root / "entities.sqlite3")
     cache = FileCache(base_dir=cache_root / "seed_cache")

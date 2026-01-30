@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Generic, Optional, TypeVar
 
-from profit.config import ensure_profit_conf_loaded, get_cache_root
+from profit.config import ensure_profit_conf_loaded, ProfitConfig, get_cache_root
 
 class CacheMissError(KeyError):
     """Raised when a cache lookup fails."""
@@ -51,7 +51,7 @@ class FileCache(Generic[T]):
         ttl: timedelta = timedelta(days=30),
         clock: Callable[[], datetime] = _default_clock,
     ) -> None:
-        self.base_dir = base_dir or get_cache_root()
+        self.base_dir = base_dir or ProfitConfig.resolve_cache_root()
         self.ttl = ttl
         self._clock = clock
         self.base_dir.mkdir(parents=True, exist_ok=True)

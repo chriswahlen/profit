@@ -32,6 +32,9 @@ class CatalogStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         uri = f"file:{self.db_path.as_posix()}" + ("?mode=ro" if readonly else "")
         self.conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+        if not readonly:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.row_factory = sqlite3.Row
         if not readonly:
             self.ensure_schema()

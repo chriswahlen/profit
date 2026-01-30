@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from profit import config
-from profit.config import get_cache_root
+from profit.config import ProfitConfig
 
 
 def test_load_profit_conf_sets_env(monkeypatch, tmp_path):
@@ -29,7 +29,7 @@ def test_default_cache_dir_honors_config(monkeypatch, tmp_path):
     monkeypatch.delenv("PROFIT_CACHE_DIR", raising=False)
     monkeypatch.delenv("PROFIT_CACHE_ROOT", raising=False)
     config._reset_for_tests()
-    base = get_cache_root()
+    base = ProfitConfig.resolve_cache_root()
     assert str(base) == "/var/cache/profit"
 
 
@@ -39,5 +39,5 @@ def test_get_data_root(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("PROFIT_DATA_ROOT", raising=False)
     config._reset_for_tests()
-    root = config.get_data_root()
+    root = ProfitConfig.resolve_data_root()
     assert str(root) == "/var/data/profit"
