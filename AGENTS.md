@@ -10,6 +10,9 @@ These guidelines define how changes should be made in this repository to keep th
 - Fail loudly on invalid inputs; validate at boundaries.
 - Model data to be **provider-neutral, globally identifiable, and time-correct**. Concretely: use internal IDs with mapping tables, prefer international standards for identifiers (ISO currencies/countries, MIC exchanges, ISIN/FIGI, etc.), and normalize time to UTC while retaining exchange/session calendar metadata.
 
+## Networking policy
+- Prefer the shared `profit.utils.url_fetcher.fetch_url` for all HTTP/FTP work; avoid custom ad-hoc network code unless a concrete limitation prevents reuse (in which case explain why in the change).
+
 ## Python standards
 - Target Python 3.11+ unless the repo specifies otherwise.
 - Prefer type hints on public APIs; use `mypy`-friendly patterns.
