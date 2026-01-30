@@ -33,6 +33,7 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = 30,
         max_batch_size: int | None = 50,
+        cfg,
         lifecycle=None,
         catalog_checker=None,
         catalog_path: str | Path | None = None,
@@ -61,6 +62,7 @@ class YFinanceFxDailyFetcher(FxDailyFetcher):
                 allow_network=allow_network,
             )
         super().__init__(
+            cfg=cfg,
             max_batch_size=max_batch_size,
             lifecycle=lifecycle,
             catalog_checker=catalog_checker,

@@ -11,6 +11,7 @@ from profit.cache import CacheMissError, FileCache, OfflineModeError
 from profit.sources.coverage import CoverageAdapter
 from profit.sources.errors import ThrottledError, InactiveInstrumentError
 from profit.sources.types import Fingerprintable, LifecycleReader
+from profit.config import ProfitConfig
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
 ResultT = TypeVar("ResultT")
@@ -30,6 +31,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
     def __init__(
         self,
         *,
+        cfg: ProfitConfig,
         cache: Optional[FileCache] = None,
         ttl: timedelta = timedelta(days=30),
         offline: bool = False,
@@ -45,6 +47,9 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         catalog_checker=None,
         refresh_catalog: bool = False,
     ) -> None:
+        if cfg is None:
+            raise ValueError("ProfitConfig is required")
+        self.cfg = cfg
         self.cache = cache or FileCache(ttl=ttl)
         self.ttl = ttl
         self.offline = offline
@@ -62,8 +67,8 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if catalog_checker is None:
             raise ValueError("catalog checker is required")
         self.catalog_checker = catalog_checker
-        # TODO: Fix this shit
-        self.refresh_catalog_flag = refresh_catalog 
+        env_refresh = os.getenv("PROFIT_REFRESH_CATALOG", "").lower() in ("1", "true", "yes", "on")
+        self.refresh_catalog_flag = refresh_catalog or cfg.refresh_catalog or env_refresh
 
     # Public API ---------------------------------------------------------
     def timeseries_fetch_many(

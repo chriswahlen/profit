@@ -9,6 +9,7 @@ import pytest
 from profit.cache import ColumnarSqliteStore
 from profit.catalog import CatalogStore, InstrumentRecord
 from profit.sources.equities import ColumnarOhlcvConfig
+from profit.config import ProfitConfig
 
 
 def _dt(y: int, m: int, d: int) -> datetime:
@@ -50,9 +51,15 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
     )
     store.mark_range_fetched(sid, start=_dt(2020, 1, 1), end=_dt(2020, 1, 2))
 
-    monkeypatch.setenv("PROFIT_DATA_ROOT", str(tmp_path))
-    monkeypatch.setenv("PROFIT_CACHE_DIR", str(tmp_path / "cache"))
-    # Catalog path uses PROFIT_DATA_ROOT/catalog.sqlite3 by default.
+    cfg = ProfitConfig(
+        data_root=tmp_path,
+        cache_root=tmp_path / "cache",
+        store_path=db_path,
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    monkeypatch.setattr("profit.config.get_data_root", lambda: tmp_path)
+    monkeypatch.setenv("PROFIT_CACHE_DIR", str(cfg.cache_root))
     calls = {"fetch": 0}
 
     def fake_chunk(self, requests, start, end):

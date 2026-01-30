@@ -21,6 +21,7 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
     def __init__(
         self,
         *,
+        cfg,
         cache: Optional[FileCache] = None,
         ttl: timedelta = timedelta(days=30),
         offline: bool = False,
@@ -28,8 +29,10 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
         backoff_factor: float = 0.5,
         max_backoff: float = 5.0,
         lifecycle=None,
+        catalog_checker=None,
     ) -> None:
         super().__init__(
+            cfg=cfg,
             cache=cache,
             ttl=ttl,
             offline=offline,
@@ -38,6 +41,7 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
             backoff_factor=backoff_factor,
             max_backoff=max_backoff,
             lifecycle=lifecycle,
+            catalog_checker=catalog_checker,
         )
 
     def fetch(self, request: RequestT, *, ttl: Optional[timedelta] = None) -> ResultT:

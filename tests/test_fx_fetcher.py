@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from profit.sources.fx import FxDailyFetcher, FxRatePoint, FxRequest, YFinanceFxDailyFetcher
 from profit.sources.types import LifecycleReader
+from profit.config import ProfitConfig
 
 
 class _NoopCatalogChecker:
@@ -25,7 +27,8 @@ def _dt(y: int, m: int, d: int) -> datetime:
 def test_fx_fetcher_dedup_and_sort():
     class FakeFxFetcher(FxDailyFetcher):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
+            cfg = kwargs.pop("cfg")
+            super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg, **kwargs)
 
         def _fetch_timeseries_chunk_many(self, requests, start, end):
             results = {}
@@ -52,7 +55,14 @@ def test_fx_fetcher_dedup_and_sort():
                 ]
             return results
 
-    fetcher = FakeFxFetcher(cache=None, max_window_days=None)
+    cfg = ProfitConfig(
+        data_root=Path("."),
+        cache_root=Path("."),
+        store_path=Path("col.sqlite3"),
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    fetcher = FakeFxFetcher(cache=None, max_window_days=None, cfg=cfg)
     req = FxRequest(base_ccy="EUR", quote_ccy="USD", provider="fake", provider_code="EURUSD")
     pts = fetcher.timeseries_fetch_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1))[0]
     assert len(pts) == 1
@@ -71,7 +81,15 @@ def test_yfinance_fx_handles_dataframe(monkeypatch):
 
     monkeypatch.setattr("profit.sources.fx.yfinance.yf", type("YF", (), {"download": fake_download}))
 
+    cfg = ProfitConfig(
+        data_root=Path("."),
+        cache_root=Path("."),
+        store_path=Path("col.sqlite3"),
+        log_level="INFO",
+        refresh_catalog=False,
+    )
     fetcher = YFinanceFxDailyFetcher(
+        cfg=cfg,
         cache=None,
         max_window_days=None,
         lifecycle=_AlwaysActiveLifecycle(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from dataclasses import dataclass
 from typing import MutableMapping, Iterable
 
 _CONFIG_LOADED = False
@@ -144,3 +145,40 @@ def add_common_cli_args(
         help="Force catalog refresh before fetching.",
     )
     return parser
+
+
+@dataclass(frozen=True)
+class ProfitConfig:
+    data_root: Path
+    cache_root: Path
+    store_path: Path
+    log_level: str
+    refresh_catalog: bool
+
+    @classmethod
+    def from_args(cls, args) -> "ProfitConfig":
+        ensure_profit_conf_loaded()
+        data_root = get_data_root()
+        cache_root = Path(getattr(args, "cache_dir") or get_cache_root(args=args))
+        store_path = Path(getattr(args, "store_path") or get_columnar_db_path(args=args))
+        log_level = getattr(args, "log_level", "INFO")
+        refresh_catalog = bool(getattr(args, "refresh_catalog", False))
+        return cls(
+            data_root=data_root,
+            cache_root=cache_root,
+            store_path=store_path,
+            log_level=log_level,
+            refresh_catalog=refresh_catalog,
+        )
+
+
+def apply_runtime_env(cfg: ProfitConfig) -> None:
+    """
+    Apply common runtime environment variables based on resolved config.
+    """
+    if cfg.refresh_catalog:
+        os.environ["PROFIT_REFRESH_CATALOG"] = "1"
+
+    yf_cache_dir = cfg.cache_root / "yfinance"
+    os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
+    yf_cache_dir.mkdir(parents=True, exist_ok=True)

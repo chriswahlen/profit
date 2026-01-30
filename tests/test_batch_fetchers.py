@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 from profit.cache import ColumnarSqliteStore, FileCache
+from profit.config import ProfitConfig
 from profit.sources.base_fetcher import BaseFetcher
 from profit.sources.equities import EquitiesDailyFetcher, EquityDailyBar, EquityDailyBarsRequest, YFinanceDailyBarsFetcher
 from profit.sources.errors import ThrottledError
@@ -29,7 +30,8 @@ def _dt(y: int, m: int, d: int) -> datetime:
 
 class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
+        cfg = kwargs.pop("cfg")
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg, **kwargs)
         self.batch_calls: list[list[EquityDailyBarsRequest]] = []
 
     def _fetch_timeseries_chunk_many(self, requests, start, end):
@@ -60,7 +62,14 @@ class _FakeEquityBatchFetcher(EquitiesDailyFetcher):
 
 def test_equities_batch_fetcher_uses_single_batch_call(tmp_path):
     cache = FileCache(base_dir=tmp_path)
-    fetcher = _FakeEquityBatchFetcher(cache=cache, max_window_days=None)
+    cfg = ProfitConfig(
+        data_root=tmp_path,
+        cache_root=tmp_path,
+        store_path=tmp_path / "col.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    fetcher = _FakeEquityBatchFetcher(cache=cache, max_window_days=None, cfg=cfg)
 
     req_a = EquityDailyBarsRequest("AAA|XNAS", "yfinance", "AAA", "1d")
     req_b = EquityDailyBarsRequest("BBB|XNAS", "yfinance", "BBB", "1d")
@@ -86,7 +95,8 @@ class _SimpleRequest:
 
 class _ThrottlingBatchFetcher(BaseFetcher[_SimpleRequest, list[str]]):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), **kwargs)
+        cfg = kwargs.pop("cfg")
+        super().__init__(*args, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg, **kwargs)
         self.attempts = 0
         self.sleeps: list[float] = []
 
@@ -114,7 +124,14 @@ def test_timeseries_fetch_many_retries_on_throttle(tmp_path):
 
     sleeps: list[float] = []
     cache = FileCache(base_dir=tmp_path)
-    fetcher = _ThrottlingBatchFetcher(cache=cache, max_window_days=None, sleep_fn=_sleep, max_attempts=2)
+    cfg = ProfitConfig(
+        data_root=tmp_path,
+        cache_root=tmp_path,
+        store_path=tmp_path / "col.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    fetcher = _ThrottlingBatchFetcher(cache=cache, max_window_days=None, sleep_fn=_sleep, max_attempts=2, cfg=cfg)
 
     req = _SimpleRequest("r1")
     result = fetcher.timeseries_fetch_many([req], _dt(2020, 1, 1), _dt(2020, 1, 1))
@@ -127,7 +144,14 @@ def test_timeseries_fetch_many_retries_on_throttle(tmp_path):
 def test_yfinance_equities_chunk_delegates_to_batch(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     cache = FileCache(base_dir=tmp_path / "cache_eq")
-    fetcher = YFinanceDailyBarsFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
+    cfg = ProfitConfig(
+        data_root=tmp_path,
+        cache_root=tmp_path,
+        store_path=tmp_path / "col.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    fetcher = YFinanceDailyBarsFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle(), catalog_checker=_NoopCatalogChecker(), cfg=cfg)
 
     called = {}
 
@@ -169,7 +193,21 @@ def test_yfinance_equities_chunk_delegates_to_batch(tmp_path):
 def test_yfinance_fx_chunk_delegates_to_batch(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col_fx.sqlite3")
     cache = FileCache(base_dir=tmp_path / "cache_fx")
-    fetcher = YFinanceFxDailyFetcher(store=store, cache=cache, max_window_days=None, lifecycle=_AlwaysActiveLifecycle())
+    cfg = ProfitConfig(
+        data_root=tmp_path,
+        cache_root=tmp_path,
+        store_path=tmp_path / "col_fx.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
+    fetcher = YFinanceFxDailyFetcher(
+        store=store,
+        cache=cache,
+        max_window_days=None,
+        lifecycle=_AlwaysActiveLifecycle(),
+        catalog_checker=_NoopCatalogChecker(),
+        cfg=cfg,
+    )
 
     called = {}
 

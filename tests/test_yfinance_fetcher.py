@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from profit.sources.equities import EquityDailyBarsRequest, YFinanceDailyBarsFetcher
 from profit.sources.types import LifecycleReader
+from profit.config import ProfitConfig
 
 class _NoopCatalogChecker:
     def ensure_fresh(self, provider: str): ...
@@ -36,7 +38,15 @@ def test_yfinance_fetcher_handles_multiindex(monkeypatch):
 
     monkeypatch.setattr("profit.sources.equities.yfinance.yf", type("YF", (), {"download": fake_download}))
 
+    cfg = ProfitConfig(
+        data_root=tmp_path := Path("."),
+        cache_root=tmp_path,
+        store_path=tmp_path / "col.sqlite3",
+        log_level="INFO",
+        refresh_catalog=False,
+    )
     fetcher = YFinanceDailyBarsFetcher(
+        cfg=cfg,
         cache=None,
         max_window_days=None,
         lifecycle=_AlwaysActiveLifecycle(),

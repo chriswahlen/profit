@@ -3,15 +3,13 @@ from __future__ import annotations
 from argparse import ArgumentParser
 import logging
 from datetime import datetime, timedelta, timezone
-import os
-from pathlib import Path
 
 from profit.cache import ColumnarSqliteStore, FileCache
 from profit.config import (
+    ProfitConfig,
     ensure_profit_conf_loaded,
-    get_cache_root,
-    get_columnar_db_path,
     add_common_cli_args,
+    apply_runtime_env,
 )
 from profit.sources.fx import (
     ColumnarFxConfig,
@@ -70,30 +68,33 @@ def main(argv: Sequence[str] | None = None) -> None:
     ensure_profit_conf_loaded()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    cfg = ProfitConfig.from_args(args)
+    apply_runtime_env(cfg)
 
     logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
-    base_cache_dir = Path(get_cache_root(args=args))
+    base_cache_dir = cfg.cache_root
     base_cache_dir.mkdir(parents=True, exist_ok=True)
     yf_cache_dir = base_cache_dir / "yfinance"
-    os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
     yf_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    store_path = get_columnar_db_path(args=args)
+    store_path = cfg.store_path
     store = ColumnarSqliteStore(store_path)
     cfg = ColumnarFxConfig()
     dataset = cfg.dataset_name(source="yfinance", version="v1")
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
     fetcher = YFinanceFxDailyFetcher(
+        cfg=cfg,
         cache=cache,
         store=store,
         catalog_path=store_path,
         cache_root=base_cache_dir,
         allow_network=True,
         include_etf=True,
+        refresh_catalog=cfg.refresh_catalog,
     )
 
     if args.describe:

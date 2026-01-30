@@ -3,12 +3,10 @@ from __future__ import annotations
 from argparse import ArgumentParser
 import logging
 from datetime import datetime, timezone, timedelta
-import os
-from pathlib import Path
 from typing import Sequence
 
 from profit.cache import ColumnarSqliteStore, FileCache
-from profit.config import ensure_profit_conf_loaded, get_cache_root, get_columnar_db_path, add_common_cli_args
+from profit.config import ProfitConfig, ensure_profit_conf_loaded, add_common_cli_args, apply_runtime_env
 from profit.sources.commodities.base import CommodityDailyRequest
 from profit.sources.commodities.columnar import ColumnarCommodityConfig, DAY_US
 
@@ -77,20 +75,22 @@ def main(argv: Sequence[str] | None = None) -> None:
     ensure_profit_conf_loaded()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    cfg = ProfitConfig.from_args(args)
+    apply_runtime_env(cfg)
 
     logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
     if args.no_cache:
         cache = FileCache(base_dir=None, ttl=timedelta(seconds=0))
     else:
-        base_cache_dir = Path(get_cache_root(args=args))
+        base_cache_dir = cfg.cache_root
         base_cache_dir.mkdir(parents=True, exist_ok=True)
         cache = FileCache(base_dir=base_cache_dir / "commodities_fetcher")
 
-    store_path = get_columnar_db_path(args=args)
+    store_path = cfg.store_path
     store_path.parent.mkdir(parents=True, exist_ok=True)
     store = ColumnarSqliteStore(db_path=store_path)
     cfg = ColumnarCommodityConfig()
@@ -99,11 +99,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     from profit.sources.commodities.goldapi import GoldApiCommoditiesFetcher
 
     fetcher = GoldApiCommoditiesFetcher(
+        cfg=cfg,
         cache=cache,
         api_key=args.api_key,
         max_window_days=None,
         catalog_path=store_path,
         allow_network=True,
+        refresh_catalog=cfg.refresh_catalog,
     )
 
     # Inject store for coverage adapter

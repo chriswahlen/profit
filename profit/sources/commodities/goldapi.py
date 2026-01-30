@@ -47,6 +47,7 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
         clock: Callable[[], datetime] | None = None,
         max_window_days: int | None = None,
         max_batch_size: int | None = 1,
+        cfg,
         lifecycle=None,
         catalog_checker=None,
         catalog_path: str | Path | None = None,
@@ -69,6 +70,7 @@ class GoldApiCommoditiesFetcher(CommoditiesDailyFetcher):
             )
 
         super().__init__(
+            cfg=cfg,
             max_window_days=max_window_days,
             max_batch_size=max_batch_size,
             lifecycle=lifecycle,
