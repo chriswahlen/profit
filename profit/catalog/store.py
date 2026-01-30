@@ -40,21 +40,44 @@ class CatalogStore:
         cur = self.conn.cursor()
         cur.executescript(
             """
-            CREATE TABLE IF NOT EXISTS instrument_catalog (
-                instrument_id   TEXT NOT NULL,
+            -- Global instruments
+            CREATE TABLE IF NOT EXISTS instrument (
+                instrument_id   TEXT PRIMARY KEY,
                 instrument_type TEXT NOT NULL,
-                provider        TEXT NOT NULL,
-                provider_code   TEXT NOT NULL,
-                mic             TEXT,
+                entity_id       TEXT,
+                description     TEXT,
+                mic_primary     TEXT,
                 currency        TEXT,
-                active_from     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'active',
+                active_from     TEXT,
                 active_to       TEXT,
-                last_seen       TEXT NOT NULL,
-                attrs           TEXT,
-                PRIMARY KEY (provider, provider_code)
+                attrs           TEXT
             );
 
-            CREATE INDEX IF NOT EXISTS idx_instrument_catalog_id ON instrument_catalog(instrument_id);
+            -- Provider mapping
+            CREATE TABLE IF NOT EXISTS instrument_provider_map (
+                provider      TEXT NOT NULL,
+                provider_code TEXT NOT NULL,
+                instrument_id TEXT NOT NULL REFERENCES instrument(instrument_id),
+                mic           TEXT,
+                currency      TEXT,
+                active_from   TEXT NOT NULL,
+                active_to     TEXT,
+                last_seen     TEXT NOT NULL,
+                attrs         TEXT,
+                PRIMARY KEY (provider, provider_code)
+            );
+            CREATE INDEX IF NOT EXISTS idx_instr_prov_map_instr ON instrument_provider_map(instrument_id);
+
+            -- Instrument/entity relations (multi-role)
+            CREATE TABLE IF NOT EXISTS instrument_entity (
+                instrument_id TEXT NOT NULL REFERENCES instrument(instrument_id),
+                entity_id     TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                active_from   TEXT NOT NULL,
+                active_to     TEXT,
+                PRIMARY KEY (instrument_id, entity_id, relation_type, active_from)
+            );
 
             CREATE TABLE IF NOT EXISTS catalog_meta (
                 provider TEXT PRIMARY KEY,
@@ -91,25 +114,62 @@ class CatalogStore:
         if not rows:
             return 0
         cur = self.conn.cursor()
+        # Ensure instruments exist globally.
+        instrument_rows = []
+        for r in records:
+            instrument_rows.append(
+                (
+                    r.instrument_id,
+                    r.instrument_type,
+                    None,  # entity_id unknown at this layer
+                    None,  # description
+                    r.mic,
+                    r.currency,
+                    "active",
+                    _dt_to_str(r.active_from),
+                    _dt_to_str(r.active_to) if r.active_to else None,
+                    json.dumps(r.attrs or {}),
+                )
+            )
         cur.executemany(
             """
-            INSERT INTO instrument_catalog (
-                instrument_id, instrument_type, provider, provider_code,
-                mic, currency, active_from, active_to, last_seen, attrs
+            INSERT INTO instrument (
+                instrument_id, instrument_type, entity_id, description, mic_primary, currency,
+                status, active_from, active_to, attrs
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(instrument_id) DO UPDATE SET
+                instrument_type=excluded.instrument_type,
+                mic_primary=COALESCE(excluded.mic_primary, instrument.mic_primary),
+                currency=COALESCE(excluded.currency, instrument.currency),
+                active_from=COALESCE(excluded.active_from, instrument.active_from),
+                active_to=CASE
+                    WHEN instrument.active_to IS NOT NULL AND excluded.active_to IS NULL THEN instrument.active_to
+                    ELSE COALESCE(excluded.active_to, instrument.active_to)
+                END,
+                attrs=excluded.attrs
+            """,
+            instrument_rows,
+        )
+        # Provider mapping
+        cur.executemany(
+            """
+            INSERT INTO instrument_provider_map (
+                instrument_id, provider, provider_code,
+                mic, currency, active_from, active_to, last_seen, attrs
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider, provider_code) DO UPDATE SET
                 instrument_id=excluded.instrument_id,
-                instrument_type=excluded.instrument_type,
                 mic=excluded.mic,
                 currency=excluded.currency,
                 -- Preserve earliest known active_from (backfill if earlier is provided).
-                active_from=MIN(instrument_catalog.active_from, excluded.active_from),
+                active_from=MIN(instrument_provider_map.active_from, excluded.active_from),
                 -- If symbol reappears, clear tombstone; otherwise keep existing active_to.
                 active_to=CASE
-                    WHEN instrument_catalog.active_to IS NOT NULL AND excluded.active_to IS NULL THEN NULL
-                    WHEN instrument_catalog.active_to IS NULL THEN excluded.active_to
-                    ELSE instrument_catalog.active_to
+                    WHEN instrument_provider_map.active_to IS NOT NULL AND excluded.active_to IS NULL THEN NULL
+                    WHEN instrument_provider_map.active_to IS NULL THEN excluded.active_to
+                    ELSE instrument_provider_map.active_to
                 END,
                 last_seen=excluded.last_seen,
                 attrs=excluded.attrs;
@@ -132,7 +192,7 @@ class CatalogStore:
         cur = self.conn.cursor()
         cur.execute(
             """
-            UPDATE instrument_catalog
+            UPDATE instrument_provider_map
             SET active_to = ?
             WHERE provider = ?
               AND active_to IS NULL
@@ -165,7 +225,7 @@ class CatalogStore:
         sql = f"""
         SELECT instrument_id, instrument_type, provider, provider_code, mic, currency,
                active_from, active_to, attrs
-        FROM instrument_catalog
+        FROM instrument_provider_map
         {where}
         ORDER BY provider, provider_code COLLATE NOCASE
         LIMIT ? OFFSET ?;
@@ -179,7 +239,7 @@ class CatalogStore:
             """
             SELECT instrument_id, instrument_type, provider, provider_code, mic, currency,
                    active_from, active_to, attrs
-            FROM instrument_catalog
+            FROM instrument_provider_map
             WHERE provider = ? AND provider_code = ?
             """,
             (provider, provider_code),
