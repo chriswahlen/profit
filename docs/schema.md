@@ -7,6 +7,9 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 - **country**: `iso2`, `iso3`, `name`, `region` (UN-style), `subregion`.
 - **venue**: `venue_id` (PK), `mic` (nullable), `name`, `country_iso2`, `timezone`, `calendar_id`.
 - **calendar**: `calendar_id` (PK), `name`, `tz`, `ruleset_version`. (Rules live externally; store version + source.)
+- **provider**: `provider_id` (PK, e.g., `sec:edgar`, `yfinance`), `name`, `description`, `homepage`, `created_at`.
+- **entity**: `entity_id` (PK, human-readable slug; lowercase `a-z0-9:_/-`), `entity_type` (`company`, `commodity`, `crypto`, ...), `name`, `country_iso2`, `status`, `attrs` (JSON).
+- **entity_identifier**: `entity_id` FK, `scheme` (`provider:sec:edgar`, `isin`, `figi`, `ticker+mic`, ...), `value`, `provider_id` (nullable FK), `active_from`, `active_to`, `last_seen`, `source_note`; PK (`entity_id`, `scheme`, `value`, `active_from`); indexes on `(scheme, value)` and `entity_id`.
 - **instrument**: `instrument_id` (PK), `type` (equity, etf, fx_pair, future, bond, crypto, index, rate, real_estate_region, macro_series, custom), `currency`, `venue_id` (nullable), `country_iso2` (nullable), `status`, `attrs` (JSON for type-specific fields, e.g., `maturity`, `multiplier`).
 - **identifier_map**: `instrument_id`, `scheme` (`isin`, `figi`, `cusip`, `ticker+mic`, `provider:code`, etc.), `value`, `active_from`, `active_to`, `source`.
 
@@ -17,6 +20,12 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 - **fundamentals_fact**: corporate fundamentals facts extracted from filings (numbers + text; totals + dimensional breakdowns) with `asof` time-travel via `known_at`. See `docs/edgar_fundamentals.md` for the initial SEC EDGAR v1 design.
 - **yield_curve_point**: `curve_id` (e.g., country+curve_type), `ts_utc`, `tenor` (P3M, P2Y, etc.), `rate`, `source`, `asof`, `version`.
 - **macro_series_point**: `series_id`, `ts_utc` (or `period_end`), `value`, `unit`, `seasonal_adjustment`, `country_iso2` (nullable), `source`, `asof`, `version`.
+
+## Company finance facts (latest-value store)
+- **company_finance_fact**: `entity_id` FK, `provider_id` FK, `provider_entity_id`, `record_id`, `report_id`, `report_key`, `period_end`, `units`, `value`, `asof`, `attrs` (JSON).
+- Primary key: (`provider_id`, `provider_entity_id`, `record_id`, `report_id`, `report_key`, `period_end`).
+- Guardrails: `asof` is NOT NULL; a newer `asof` overwrites the row, identical payload is a no-op, and an older-asof conflicting payload is rejected.
+- Indexes: `(entity_id, period_end)`, `(provider_id, provider_entity_id)`, `(provider_id, provider_entity_id, report_id, report_key, period_end)`.
 
 ## Real estate (stub for later)
 - **re_region**: `region_id` (PK), `name`, `country_iso2`, `admin_level` (city/county/state/metro), `parent_region_id` (nullable), `geojson` (nullable).

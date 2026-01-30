@@ -37,6 +37,55 @@ class InstrumentRecord:
     attrs: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class EntityRecord:
+    """
+    Provider-neutral entity metadata (companies, commodities, crypto, etc.).
+    """
+
+    entity_id: str
+    entity_type: str
+    name: str
+    country_iso2: str | None = None
+    status: str = "active"
+    attrs: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class EntityIdentifierRecord:
+    """
+    Identifier mapping between an entity and a scheme (provider codes, ISIN, FIGI, ticker+mic).
+    """
+
+    entity_id: str
+    scheme: str
+    value: str
+    provider_id: str | None = None
+    active_from: datetime | None = None
+    active_to: datetime | None = None
+    last_seen: datetime | None = None
+    source_note: str | None = None
+
+
+@dataclass(frozen=True)
+class FinanceFactRecord:
+    """
+    Single fact from a provider filing/report for an entity.
+    """
+
+    entity_id: str
+    provider_id: str
+    provider_entity_id: str
+    record_id: str
+    report_id: str
+    report_key: str
+    period_end: datetime
+    units: str
+    value: float | int | None
+    asof: datetime
+    attrs: dict[str, Any] | None = None
+
+
 class DiscoverableFetcher(Protocol):
     """
     Optional mixin for fetchers that can describe their capabilities.
