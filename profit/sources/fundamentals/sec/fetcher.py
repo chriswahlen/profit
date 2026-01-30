@@ -26,6 +26,7 @@ from profit.sources.fundamentals.models import FundamentalsRequest, FactRow, Fil
 from profit.sources.fundamentals.schemas import ensure_sec_fundamentals_schemas
 from profit.sources.fundamentals.writer import write_facts, write_filings
 from profit.sources.fundamentals.sec.parse import parse_xbrl_json
+from profit.sources.fundamentals.sec.refresher import SecCompanyTickersRefresher
 from profit.sources.fundamentals.models import FactRow
 
 logger = logging.getLogger(__name__)
@@ -68,9 +69,9 @@ class SecEdgarFundamentalsFetcher(BaseFetcher[FundamentalsRequest, list[FactRow]
             lifecycle = CatalogLifecycleReader(cat_store)
             catalog_checker = CatalogChecker(
                 store=cat_store,
-                refresher=_NoopRefresher(),
-                max_age=timedelta(days=365),
-                allow_network=False,
+                refresher=SecCompanyTickersRefresher(cat_store),
+                max_age=timedelta(days=7),
+                allow_network=allow_network,
             )
 
         super().__init__(
@@ -166,6 +167,7 @@ class SecEdgarFundamentalsFetcher(BaseFetcher[FundamentalsRequest, list[FactRow]
                 logger.warning("sec fundamentals: network unavailable for xbrl json accession=%s; using fallback", filing.accession)
                 return _fallback_zip_or_companyfacts(filing, edgar_cfg, cache, self._allow_network)
             try:
+                logger.info("sec fundaments: fetched xbrl size=%d" % len(raw))
                 cache.set(key, raw)
             except Exception:
                 pass

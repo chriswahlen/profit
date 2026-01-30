@@ -6,6 +6,8 @@ from argparse import ArgumentParser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
+import os
+import requests
 
 from profit.catalog import CatalogService, CatalogStore, InstrumentRecord
 from profit.config import ensure_profit_conf_loaded, get_columnar_db_path
@@ -67,6 +69,11 @@ def _build_parser() -> ArgumentParser:
         type=Path,
         default=Path("profit/sources/fundamentals/sec/sec_ciks.csv"),
         help="CSV with columns: cik,ticker,name,active_from,active_to (default: profit/sources/fundamentals/sec/sec_ciks.csv).",
+    )
+    # sec company tickers JSON
+    sub.add_parser(
+        "sec-company-tickers",
+        help="Load SEC company_tickers.json (CIK/ticker/name) from sec.gov/files/company_tickers.json",
     )
 
     parser.add_argument(
@@ -238,6 +245,51 @@ def load_sec_cik(args, store: CatalogStore) -> int:
     return store.upsert_instruments(rows)
 
 
+def _user_agent() -> str:
+    return os.getenv("SEC_USER_AGENT") or os.getenv("PROFIT_SEC_USER_AGENT") or "profit-cli"
+
+
+def load_sec_company_tickers(_args, store: CatalogStore) -> int:
+    """
+    Load SEC's company_tickers.json feed into the catalog (provider=sec).
+    """
+    url = "https://www.sec.gov/files/company_tickers.json"
+    ua = _user_agent()
+    resp = requests.get(url, headers={"User-Agent": ua})
+    resp.raise_for_status()
+    data = resp.json()
+    # The JSON is a dict keyed by integer index: {"0":{"cik_str":..., "ticker":..., "title":...}, ...}
+    rows: list[InstrumentRecord] = []
+    now = _now()
+    for entry in data.values():
+        cik_raw = str(entry.get("cik_str", "")).strip()
+        ticker = (entry.get("ticker") or "").strip()
+        name = (entry.get("title") or "").strip()
+        if not cik_raw:
+            continue
+        cik = _pad_cik(cik_raw)
+        instrument_id = f"equity:US:CIK:{cik}"
+        attrs = {}
+        if ticker:
+            attrs["ticker"] = ticker
+        if name:
+            attrs["name"] = name
+        rows.append(
+            InstrumentRecord(
+                instrument_id=instrument_id,
+                instrument_type="equity",
+                provider="sec",
+                provider_code=cik,
+                mic=None,
+                currency=None,
+                active_from=now,
+                active_to=None,
+                attrs=attrs,
+            )
+        )
+    return store.upsert_instruments(rows)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     ensure_profit_conf_loaded()
     parser = _build_parser()
@@ -259,6 +311,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         written = load_goldapi(args, store)
     elif args.provider == "sec-cik":
         written = load_sec_cik(args, store)
+    elif args.provider == "sec-company-tickers":
+        written = load_sec_company_tickers(args, store)
     else:
         parser.error(f"Unknown provider {args.provider}")
         return

@@ -84,7 +84,7 @@ def main(argv=None) -> None:
     )
 
     logging.info("fetch start cik=%s start=%s end=%s", args.cik, args.start, args.end)
-    fetcher._fetch_timeseries_chunk_many([req], req.start, req.end)  # noqa: SLF001
+    fetcher.timeseries_fetch_many([req], req.start, req.end)
     logging.info("fetch done")
 
     if args.asof:

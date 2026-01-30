@@ -7,3 +7,4 @@ data/
 fake_web
 *.egg-info
 venv/*
+datasets/*

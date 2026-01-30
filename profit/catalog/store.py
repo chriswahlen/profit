@@ -114,8 +114,8 @@ class CatalogStore:
                 instrument_type=excluded.instrument_type,
                 mic=excluded.mic,
                 currency=excluded.currency,
-                -- Preserve original active_from; only backfill if missing.
-                active_from=COALESCE(instrument_catalog.active_from, excluded.active_from),
+                -- Preserve earliest known active_from (backfill if earlier is provided).
+                active_from=MIN(instrument_catalog.active_from, excluded.active_from),
                 -- If symbol reappears, clear tombstone; otherwise keep existing active_to.
                 active_to=CASE
                     WHEN instrument_catalog.active_to IS NOT NULL AND excluded.active_to IS NULL THEN NULL

@@ -34,6 +34,27 @@ class CatalogChecker:
     def ensure_fresh(self, provider: str) -> None:
         meta = self.store.read_meta(provider)
         now = datetime.now(timezone.utc)
+        if meta is None:
+            logger.info("catalog staleness provider=%s status=missing action=refresh", provider)
+        else:
+            age = now - meta["refreshed_at"]
+            days = age.days + age.seconds / 86400
+            if age <= self.max_age:
+                logger.info(
+                    "catalog staleness provider=%s status=fresh refreshed_at=%s age_days=%.2f",
+                    provider,
+                    meta["refreshed_at"],
+                    days,
+                )
+            else:
+                stale_by = age - self.max_age
+                stale_days = stale_by.days + stale_by.seconds / 86400
+                logger.info(
+                    "catalog staleness provider=%s status=stale refreshed_at=%s stale_by_days=%.2f",
+                    provider,
+                    meta["refreshed_at"],
+                    stale_days,
+                )
         if meta is None or now - meta["refreshed_at"] > self.max_age:
             logger.info("catalog refresh start provider=%s reason=%s", provider, "missing" if meta is None else "stale")
             self.refresher.refresh(provider, allow_network=self.allow_network, use_cache_only=self.use_cache_only)
