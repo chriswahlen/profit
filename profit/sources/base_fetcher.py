@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         max_batch_size: Optional[int] = None,
         lifecycle: LifecycleReader | None = None,
         catalog_checker=None,
+        refresh_catalog: bool = False,
     ) -> None:
         self.cache = cache or FileCache(ttl=ttl)
         self.ttl = ttl
@@ -60,6 +62,8 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if catalog_checker is None:
             raise ValueError("catalog checker is required")
         self.catalog_checker = catalog_checker
+        # TODO: Fix this shit
+        self.refresh_catalog_flag = refresh_catalog 
 
     # Public API ---------------------------------------------------------
     def timeseries_fetch_many(
@@ -93,6 +97,8 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         if None in providers:
             raise ValueError("Requests must expose provider for catalog enforcement")
         for p in providers:
+            if self.refresh_catalog_flag:
+                self.catalog_checker.mark_stale(str(p))
             self.catalog_checker.ensure_fresh(str(p))
 
         # Lifecycle clipping per request.
