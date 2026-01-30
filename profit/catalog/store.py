@@ -54,18 +54,7 @@ class CatalogStore:
                 PRIMARY KEY (provider, provider_code)
             );
 
-            CREATE TABLE IF NOT EXISTS identifier_map (
-                instrument_id TEXT NOT NULL,
-                scheme        TEXT NOT NULL,
-                value         TEXT NOT NULL,
-                active_from   TEXT NOT NULL,
-                active_to     TEXT,
-                source        TEXT,
-                PRIMARY KEY (scheme, value, active_from)
-            );
-
             CREATE INDEX IF NOT EXISTS idx_instrument_catalog_id ON instrument_catalog(instrument_id);
-            CREATE INDEX IF NOT EXISTS idx_identifier_map_instr ON identifier_map(instrument_id);
 
             CREATE TABLE IF NOT EXISTS catalog_meta (
                 provider TEXT PRIMARY KEY,
