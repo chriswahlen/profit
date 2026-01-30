@@ -58,7 +58,7 @@ def write_facts(
     *,
     max_text_chars: int = DEFAULT_TEXT_MAX_CHARS,
     preview_chars: int = DEFAULT_TEXT_PREVIEW_CHARS,
-    overwrite: bool = False,
+    overwrite: bool = True,
 ) -> int:
     """
     Append fact rows; ensures schema exists and applies text encoding rules.
