@@ -60,6 +60,15 @@ def _build_parser() -> ArgumentParser:
     # goldapi
     sub.add_parser("goldapi", help="Load gold/silver instrument rows for goldapi provider.")
 
+    # sec (cik seed)
+    p_sec = sub.add_parser("sec-cik", help="Load SEC CIK seeds (provider=sec) from CSV.")
+    p_sec.add_argument(
+        "--csv",
+        type=Path,
+        default=Path("profit/sources/fundamentals/sec/sec_ciks.csv"),
+        help="CSV with columns: cik,ticker,name,active_from,active_to (default: profit/sources/fundamentals/sec/sec_ciks.csv).",
+    )
+
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -164,9 +173,68 @@ def load_goldapi(_args, store: CatalogStore) -> int:
             currency="USD",
             active_from=now,
             active_to=None,
-            attrs={"name": "silver"},
+        attrs={"name": "silver"},
         ),
     ]
+    return store.upsert_instruments(rows)
+
+
+def _pad_cik(raw: str) -> str:
+    raw = raw.strip()
+    return raw.zfill(10)
+
+
+def load_sec_cik(args, store: CatalogStore) -> int:
+    """
+    Load SEC CIKs as provider=sec instruments.
+
+    Expected CSV headers: cik,ticker,name,active_from,active_to
+    - cik is required
+    - active_from/active_to optional (ISO8601). If missing, active_from=now, active_to=None.
+    """
+    now = _now()
+    path = args.csv
+    if not path.exists():
+        raise FileNotFoundError(f"SEC CIK CSV not found: {path}")
+
+    rows: list[InstrumentRecord] = []
+    with path.open(newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            cik_raw = row.get("cik", "") or ""
+            if not cik_raw.strip():
+                continue
+            cik = _pad_cik(cik_raw)
+            instrument_id = f"equity:US:CIK:{cik}"
+            active_from_str = (row.get("active_from") or "").strip()
+            active_to_str = (row.get("active_to") or "").strip()
+            try:
+                active_from = datetime.fromisoformat(active_from_str) if active_from_str else now
+                active_to = datetime.fromisoformat(active_to_str) if active_to_str else None
+            except Exception as exc:
+                raise ValueError(f"Invalid active_from/active_to for CIK={cik}") from exc
+
+            attrs = {}
+            ticker = (row.get("ticker") or "").strip()
+            name = (row.get("name") or "").strip()
+            if ticker:
+                attrs["ticker"] = ticker
+            if name:
+                attrs["name"] = name
+
+            rows.append(
+                InstrumentRecord(
+                    instrument_id=instrument_id,
+                    instrument_type="equity",
+                    provider="sec",
+                    provider_code=cik,
+                    mic=None,
+                    currency=None,
+                    active_from=active_from,
+                    active_to=active_to,
+                    attrs=attrs,
+                )
+            )
     return store.upsert_instruments(rows)
 
 
@@ -189,6 +257,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         written = load_yfinance_fx(args, store)
     elif args.provider == "goldapi":
         written = load_goldapi(args, store)
+    elif args.provider == "sec-cik":
+        written = load_sec_cik(args, store)
     else:
         parser.error(f"Unknown provider {args.provider}")
         return

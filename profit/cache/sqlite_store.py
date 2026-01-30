@@ -28,7 +28,7 @@ class ColumnDef:
     is_primary_key: bool = False
 
 
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_:]*$")
 
 
 def _quote(identifier: Identifier) -> str:
@@ -248,6 +248,52 @@ class SqliteStore:
         )
         self._conn.commit()
 
+    def query(self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None = None, *, as_dataframe: bool | None = None):
+        """
+        Run an arbitrary SELECT and decode TIMESTAMP columns similarly to `read`.
+
+        Intended for advanced queries (CTEs, window functions) that `read` does not support.
+        """
+        cur = self._conn.cursor()
+        cur.execute(sql, params or [])
+        rows = cur.fetchall()
+        if not rows:
+            return [] if as_dataframe is False else []
+
+        # Best-effort decode: use cursor description to identify TIMESTAMP columns
+        # by matching the column name to the dataset schema when possible.
+        # When schema is unknown (arbitrary query), we fall back to raw values.
+        col_names = [desc[0] for desc in cur.description]
+        decoded_rows = []
+        for row in rows:
+            as_dict = {}
+            for idx, name in enumerate(col_names):
+                val = row[idx]
+                if isinstance(val, str) and _looks_like_iso_ts(val):
+                    try:
+                        as_dict[name] = _decode_value(val, "TIMESTAMP")
+                        continue
+                    except Exception:
+                        pass
+                as_dict[name] = val
+            decoded_rows.append(as_dict)
+
+        if as_dataframe is False:
+            return decoded_rows
+        if as_dataframe is True:
+            try:
+                import pandas as pd  # type: ignore
+
+                return pd.DataFrame(decoded_rows)
+            except ModuleNotFoundError:
+                return decoded_rows
+        try:
+            import pandas as pd  # type: ignore
+
+            return pd.DataFrame(decoded_rows)
+        except ModuleNotFoundError:
+            return decoded_rows
+
     # Internal helpers ------------------------------------------------
     def _init_metadata(self) -> None:
         cur = self._conn.cursor()
@@ -289,61 +335,58 @@ class SqliteStore:
                 for col in columns
             ],
         )
+        self._conn.commit()
 
-    def _load_schema(self, name: Identifier) -> Sequence[ColumnDef]:
+    def _load_schema(self, name: Identifier) -> list[ColumnDef]:
+        if not self._dataset_exists(name):
+            raise DatasetNotFoundError(name)
         cur = self._conn.cursor()
         cur.execute(
             """
             SELECT column_name, declared_type, is_primary_key
             FROM __dataset_schema__
             WHERE dataset = ?
-            ORDER BY rowid
+            ORDER BY rowid ASC
             """,
             (name,),
         )
         rows = cur.fetchall()
-        if not rows:
-            raise DatasetNotFoundError(name)
-        return [
-            ColumnDef(row["column_name"], row["declared_type"], bool(row["is_primary_key"]))
-            for row in rows
-        ]
+        return [ColumnDef(r["column_name"], r["declared_type"], bool(r["is_primary_key"])) for r in rows]
 
     def _normalize_schema(
         self,
         schema: Mapping[Identifier, str],
-        primary_keys: Sequence[Identifier] | None,
+        primary_keys: Sequence[Identifier] | None = None,
     ) -> list[ColumnDef]:
-        columns: list[ColumnDef] = []
-        primary_set = set(primary_keys or [])
-
-        for name, declared_type in schema.items():
-            declared_upper = declared_type.upper()
-            if declared_upper not in {"TEXT", "INTEGER", "REAL", "BLOB", "TIMESTAMP"}:
-                raise SchemaError(f"Unsupported type {declared_type!r} for column {name!r}")
-            columns.append(
-                ColumnDef(
-                    name=name,
-                    declared_type=declared_upper,
-                    is_primary_key=name in primary_set,
-                )
-            )
-
-        missing_pks = primary_set - {c.name for c in columns}
-        if missing_pks:
-            raise SchemaError(f"Primary keys {sorted(missing_pks)} not present in schema")
+        primary_keys = list(primary_keys or [])
+        columns = []
+        for name, decl in schema.items():
+            if not _IDENT_RE.match(name):
+                raise SchemaError(f"Invalid column name: {name!r}")
+            col = ColumnDef(name, decl.upper(), name in primary_keys)
+            columns.append(col)
+        if primary_keys:
+            missing = set(primary_keys) - {c.name for c in columns}
+            if missing:
+                raise SchemaError(f"Primary key columns missing from schema: {missing}")
         return columns
 
-    @staticmethod
-    def _infer_schema_from_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-        schema: dict[str, str] = {}
+    def _infer_schema_from_rows(self, rows: Iterable[Mapping[str, Any]]) -> dict[Identifier, str]:
+        inferred: dict[Identifier, str] = {}
         for row in rows:
-            for key, value in row.items():
-                if key in schema:
-                    continue
-                schema[key] = _canonical_type(value)
-        return schema
+            for k, v in row.items():
+                decl = _canonical_type(v)
+                prev = inferred.get(k)
+                if prev is None:
+                    inferred[k] = decl
+                elif prev != decl:
+                    raise SchemaError(f"Conflicting inferred types for column {k!r}: {prev} vs {decl}")
+        return inferred
 
+
+def _looks_like_iso_ts(val: str) -> bool:
+    # Cheap check for ISO8601 with Z or offset.
+    return "T" in val and ("Z" in val or "+" in val or "-" in val)
 
 def _to_dataframe(rows: list[Mapping[str, Any]]):
     import pandas as pd  # type: ignore
