@@ -83,8 +83,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     store_path = cfg.store_path
     store = ColumnarSqliteStore(store_path)
-    cfg = ColumnarFxConfig()
-    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    fx_cfg = ColumnarFxConfig()
+    dataset = fx_cfg.dataset_name(source="yfinance", version="v1")
     cache = FileCache(base_dir=base_cache_dir / "fx_fetcher")
     fetcher = YFinanceFxDailyFetcher(
         cfg=cfg,

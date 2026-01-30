@@ -38,8 +38,8 @@ def test_script_skip_fetch_when_complete(monkeypatch, tmp_path):
         ]
     )
     catalog.write_meta(provider="yfinance", refreshed_at=_dt(2026, 1, 1), source_version=None, row_count=1)
-    cfg = ColumnarOhlcvConfig()
-    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    ohlcv_cfg = ColumnarOhlcvConfig()
+    dataset = ohlcv_cfg.dataset_name(source="yfinance", version="v1")
     sid = store.get_or_create_series(
         instrument_id="AAPL|XNAS",
         dataset=dataset,

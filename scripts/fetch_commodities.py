@@ -93,8 +93,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     store_path = cfg.store_path
     store_path.parent.mkdir(parents=True, exist_ok=True)
     store = ColumnarSqliteStore(db_path=store_path)
-    cfg = ColumnarCommodityConfig()
-    dataset = cfg.dataset_name(source=provider, version="v1")
+    commodity_cfg = ColumnarCommodityConfig()
+    dataset = commodity_cfg.dataset_name(source=provider, version="v1")
 
     from profit.sources.commodities.goldapi import GoldApiCommoditiesFetcher
 

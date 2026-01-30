@@ -106,8 +106,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     store_path = cfg.store_path
     store = ColumnarSqliteStore(db_path=store_path)
-    cfg = ColumnarOhlcvConfig()
-    dataset = cfg.dataset_name(source="yfinance", version="v1")
+    ohlcv_cfg = ColumnarOhlcvConfig()
+    dataset = ohlcv_cfg.dataset_name(source="yfinance", version="v1")
 
     cache = FileCache(base_dir=base_cache_dir / "fetcher")
     fetcher = YFinanceDailyBarsFetcher(
