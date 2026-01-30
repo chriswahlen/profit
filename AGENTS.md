@@ -54,3 +54,7 @@ These guidelines define how changes should be made in this repository to keep th
 ## When unsure
 - Ask for clarification on requirements (data source, schema expectations, performance constraints).
 - Default to the simplest solution that preserves future extensibility.
+
+## DRY changes across scripts
+- When a behavior (flags, env wiring, refresh logic, lifecycle handling) is needed in multiple scripts or fetchers, centralize it in shared helpers/factories instead of copy/pasting per script.
+- Prefer putting shared wiring in `BaseFetcher`, a common builder, or config helper so future changes are one-touch.

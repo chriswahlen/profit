@@ -25,6 +25,12 @@ class CatalogChecker:
     allow_network: bool
     use_cache_only: bool = False
 
+    def mark_stale(self, provider: str) -> None:
+        cur = self.store.conn.cursor()
+        cur.execute("DELETE FROM catalog_meta WHERE provider = ?", (provider,))
+        self.store.conn.commit()
+        logger.info("catalog meta marked stale provider=%s", provider)
+
     def ensure_fresh(self, provider: str) -> None:
         meta = self.store.read_meta(provider)
         now = datetime.now(timezone.utc)
