@@ -14,6 +14,7 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 - **bar_ohlcv**: `instrument_id`, `ts_utc`, `freq` (1m/5m/1d/etc), `open`, `high`, `low`, `close`, `volume`, `vwap` (nullable), `currency`, `source`, `asof`, `version`.
 - **fx_rate**: `base_ccy`, `quote_ccy`, `ts_utc`, `rate`, `source`, `asof`, `version`.
 - **corporate_action**: `instrument_id`, `effective_date`, `action_type` (`split`, `dividend_cash`, `dividend_stock`, `symbol_change`, `merger`, etc.), `ratio` (for splits), `cash_amount`, `cash_currency`, `new_identifier` (for symbol change/merger), `source`, `asof`, `version`.
+- **fundamentals_fact**: corporate fundamentals facts extracted from filings (numbers + text; totals + dimensional breakdowns) with `asof` time-travel via `known_at`. See `docs/edgar_fundamentals.md` for the initial SEC EDGAR v1 design.
 - **yield_curve_point**: `curve_id` (e.g., country+curve_type), `ts_utc`, `tenor` (P3M, P2Y, etc.), `rate`, `source`, `asof`, `version`.
 - **macro_series_point**: `series_id`, `ts_utc` (or `period_end`), `value`, `unit`, `seasonal_adjustment`, `country_iso2` (nullable), `source`, `asof`, `version`.
 
@@ -40,4 +41,3 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 ## Versioning & as-of
 - Every mutable dataset carries `version` (schema or provider change) and `asof` (ingestion timestamp). Query APIs should allow “as-of” time travel.
 - Breaking schema changes increment `version` and invalidate/segment caches accordingly.
-
