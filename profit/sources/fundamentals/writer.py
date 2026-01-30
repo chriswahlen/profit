@@ -49,7 +49,7 @@ def write_filings(store: SqliteStore, rows: Iterable[Mapping[str, Any]]) -> int:
         if isinstance(attrs, dict):
             base["attrs"] = json.dumps(attrs)
         encoded.append(base)
-    return store.append("fundamentals_filing:sec:v1", encoded, overwrite=True)
+    return store.append("fundamentals_filing_sec_v1", encoded, overwrite=True)
 
 
 def write_facts(
@@ -95,4 +95,4 @@ def write_facts(
             base["attrs"] = json.dumps(attrs)
         prepared.append(base)
 
-    return store.append("fundamentals_fact:sec:v1", prepared, overwrite=overwrite)
+    return store.append("fundamentals_fact_sec_v1", prepared, overwrite=overwrite)

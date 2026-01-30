@@ -218,7 +218,7 @@ class _NoopRefresher:
 def _existing_accessions(store: SqliteStore, cik: str) -> set[str]:
     try:
         rows = store.read(
-            "fundamentals_filing:sec:v1",
+            "fundamentals_filing_sec_v1",
             columns=["accession"],
             where="provider = :p AND provider_code = :c",
             params={"p": "sec", "c": cik},
@@ -593,6 +593,50 @@ def _parse_units(root: ET.Element, nsmap: dict[str, str]):
     return units
 
 
+def _load_submissions(cik: str, edgar_cfg: SecEdgarConfig, cache: FileCache | None, allow_network: bool) -> dict:
+    if cache is None:
+        cache = FileCache(ttl=edgar_cfg.cache_ttl)
+    key = f"sec_submissions_{cik}"
+    data: bytes | None = None
+    try:
+        data = cache.get(key, ttl=edgar_cfg.cache_ttl).value
+    except CacheMissError:
+        data = None
+    if data is None:
+        if not allow_network and not edgar_cfg.allow_network:
+            raise RuntimeError("network disabled and submissions not cached")
+        url = f"{edgar_cfg.submissions_base}CIK{cik}.json"
+        logger.info("sec fetch submissions cik=%s url=%s", cik, url)
+        data = _http_get(url, edgar_cfg=edgar_cfg)
+        try:
+            cache.set(key, data)
+        except Exception:
+            pass
+    return json.loads(data)
+
+
+def _load_submissions_file(name: str, edgar_cfg: SecEdgarConfig, cache: FileCache | None, allow_network: bool) -> dict:
+    if cache is None:
+        cache = FileCache(ttl=edgar_cfg.cache_ttl)
+    key = f"sec_submissions_file_{name}"
+    data: bytes | None = None
+    try:
+        data = cache.get(key, ttl=edgar_cfg.cache_ttl).value
+    except CacheMissError:
+        data = None
+    if data is None:
+        if not allow_network and not edgar_cfg.allow_network:
+            raise RuntimeError("network disabled and submissions file not cached")
+        url = f"{edgar_cfg.submissions_base}{name}"
+        logger.info("sec fetch submissions file name=%s url=%s", name, url)
+        data = _http_get(url, edgar_cfg=edgar_cfg)
+        try:
+            cache.set(key, data)
+        except Exception:
+            pass
+    return json.loads(data)
+
+
 def _list_filings(req: FundamentalsRequest, *, edgar_cfg: SecEdgarConfig, cache: FileCache | None, allow_network: bool) -> Iterable[FilingRow]:
     """
     List filings from the SEC submissions JSON and filter by form + filed date window.
@@ -600,69 +644,68 @@ def _list_filings(req: FundamentalsRequest, *, edgar_cfg: SecEdgarConfig, cache:
     if cache is None:
         cache = FileCache(ttl=edgar_cfg.cache_ttl)
 
-    key = f"sec_submissions_{req.provider_code}"
-    data: bytes | None = None
-    try:
-        entry = cache.get(key, ttl=edgar_cfg.cache_ttl)
-        data = entry.value
-    except CacheMissError:
-        data = None
+    submissions = _load_submissions(req.provider_code, edgar_cfg, cache, allow_network)
 
-    if data is None:
-        if not allow_network and not edgar_cfg.allow_network:
-            raise RuntimeError("network disabled and submissions not cached")
-        url = f"{edgar_cfg.submissions_base}CIK{req.provider_code}.json"
-        logger.info("sec fetch submissions cik=%s url=%s", req.provider_code, url)
-        data = _http_get(url, edgar_cfg=edgar_cfg)
-        try:
-            cache.set(key, data)
-        except Exception:
-            pass
+    def _emit_from_lists(recent_section):
+        accns = recent_section.get("accessionNumber", [])
+        forms = recent_section.get("form", [])
+        filed = recent_section.get("filingDate", [])
+        accepted = recent_section.get("acceptanceDateTime", [])
+        report = recent_section.get("reportDate", [])
 
-    payload = json.loads(data)
-    recent = payload.get("filings", {}).get("recent", {})
-    accns = recent.get("accessionNumber", [])
-    forms = recent.get("form", [])
-    filed = recent.get("filingDate", [])
-    accepted = recent.get("acceptanceDateTime", [])
-    report = recent.get("reportDate", [])
-
-    now = datetime.now(timezone.utc)
-    for acc, form, filed_str, accepted_str, report_str in zip(accns, forms, filed, accepted, report):
-        form = form.strip()
-        if form not in req.forms:
-            continue
-        try:
-            filed_at = datetime.fromisoformat(filed_str).replace(tzinfo=timezone.utc)
-        except Exception:
-            continue
-        if filed_at < req.start or filed_at > req.end:
-            continue
-        accepted_at = None
-        try:
-            if accepted_str:
-                accepted_at = datetime.fromisoformat(accepted_str.replace(" ", "T")).astimezone(timezone.utc)
-        except Exception:
+        now = datetime.now(timezone.utc)
+        for acc, form, filed_str, accepted_str, report_str in zip(accns, forms, filed, accepted, report):
+            form = form.strip()
+            if form not in req.forms:
+                continue
+            try:
+                filed_at = datetime.fromisoformat(filed_str).replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            if filed_at < req.start or filed_at > req.end:
+                continue
             accepted_at = None
-        known_at = accepted_at or filed_at
-        report_end = None
-        try:
-            if report_str:
-                report_end = datetime.fromisoformat(report_str).replace(tzinfo=timezone.utc)
-        except Exception:
+            try:
+                if accepted_str:
+                    accepted_at = datetime.fromisoformat(accepted_str.replace(" ", "T")).astimezone(timezone.utc)
+            except Exception:
+                accepted_at = None
+            known_at = accepted_at or filed_at
             report_end = None
-        is_amendment = form.endswith("/A")
-        yield FilingRow(
-            provider="sec",
-            provider_code=req.provider_code,
-            instrument_id=req.instrument_id,
-            accession=acc.replace("-", ""),
-            form=form,
-            filed_at=filed_at,
-            accepted_at=accepted_at,
-            known_at=known_at,
-            report_period_end=report_end,
-            is_amendment=is_amendment,
-            asof=now,
-            attrs={},
-        )
+            try:
+                if report_str:
+                    report_end = datetime.fromisoformat(report_str).replace(tzinfo=timezone.utc)
+            except Exception:
+                report_end = None
+            is_amendment = form.endswith("/A")
+            yield FilingRow(
+                provider="sec",
+                provider_code=req.provider_code,
+                instrument_id=req.instrument_id,
+                accession=acc.replace("-", ""),
+                form=form,
+                filed_at=filed_at,
+                accepted_at=accepted_at,
+                known_at=known_at,
+                report_period_end=report_end,
+                is_amendment=is_amendment,
+                asof=now,
+                attrs={},
+            )
+
+    # recent
+    recent = submissions.get("filings", {}).get("recent", {})
+    yield from _emit_from_lists(recent)
+
+    # historical files
+    files_meta = submissions.get("filings", {}).get("files", [])
+    for fmeta in files_meta:
+        fname = fmeta.get("name")
+        if not fname:
+            continue
+        try:
+            sub_data = _load_submissions_file(fname, edgar_cfg, cache, allow_network)
+        except Exception:
+            continue
+        recent_section = sub_data.get("filings", {}).get("recent", {})
+        yield from _emit_from_lists(recent_section)

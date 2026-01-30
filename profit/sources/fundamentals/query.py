@@ -69,7 +69,7 @@ def read_asof(
                 PARTITION BY instrument_id, tag_qname, period_start, period_end, unit, dims_hash, value_kind
                 ORDER BY known_at DESC
             ) AS rn
-        FROM "fundamentals_fact:sec:v1"
+        FROM fundamentals_fact_sec_v1
         WHERE {where_sql}
     )
     SELECT * FROM candidates WHERE rn = 1{limit_sql};

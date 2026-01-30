@@ -3,6 +3,10 @@ from __future__ import annotations
 from profit.cache import SqliteStore
 
 
+FILING_TABLE = "fundamentals_filing_sec_v1"
+FACT_TABLE = "fundamentals_fact_sec_v1"
+
+
 def ensure_sec_fundamentals_schemas(store: SqliteStore) -> None:
     """
     Ensure the SEC fundamentals datasets exist (idempotent).
@@ -14,7 +18,7 @@ def ensure_sec_fundamentals_schemas(store: SqliteStore) -> None:
 
 def _ensure_filing_schema(store: SqliteStore) -> None:
     store.create_dataset(
-        "fundamentals_filing:sec:v1",
+        FILING_TABLE,
         {
             "provider": "TEXT",
             "provider_code": "TEXT",
@@ -36,7 +40,7 @@ def _ensure_filing_schema(store: SqliteStore) -> None:
 
 def _ensure_fact_schema(store: SqliteStore) -> None:
     store.create_dataset(
-        "fundamentals_fact:sec:v1",
+        FACT_TABLE,
         {
             # identity / lineage
             "instrument_id": "TEXT",
@@ -90,21 +94,21 @@ def _ensure_indexes(store: SqliteStore) -> None:
     cur.executescript(
         """
         CREATE INDEX IF NOT EXISTS idx_fundsec_filing_known_at
-            ON "fundamentals_filing:sec:v1"(provider, provider_code, known_at);
+            ON fundamentals_filing_sec_v1(provider, provider_code, known_at);
 
         CREATE INDEX IF NOT EXISTS idx_fundsec_fact_known_at
-            ON "fundamentals_fact:sec:v1"(instrument_id, known_at);
+            ON fundamentals_fact_sec_v1(instrument_id, known_at);
 
         CREATE INDEX IF NOT EXISTS idx_fundsec_fact_tag_period
-            ON "fundamentals_fact:sec:v1"(instrument_id, tag_qname, period_end);
+            ON fundamentals_fact_sec_v1(instrument_id, tag_qname, period_end);
 
         CREATE INDEX IF NOT EXISTS idx_fundsec_fact_identity_known
-            ON "fundamentals_fact:sec:v1"(
+            ON fundamentals_fact_sec_v1(
                 instrument_id, tag_qname, period_start, period_end, unit, dims_hash, value_kind, known_at
             );
 
         CREATE INDEX IF NOT EXISTS idx_fundsec_fact_dims
-            ON "fundamentals_fact:sec:v1"(dims_hash);
+            ON fundamentals_fact_sec_v1(dims_hash);
         """
     )
     store._conn.commit()

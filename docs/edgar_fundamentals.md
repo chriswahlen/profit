@@ -95,7 +95,7 @@ Why:
 
 ### 1) Filings (coverage + lineage)
 
-Dataset name: `fundamentals_filing:sec:v1`
+Dataset name: `fundamentals_filing_sec_v1`
 
 Primary key:
 - `(provider, provider_code, accession)`
@@ -120,7 +120,7 @@ Why:
 
 ### 2) Facts (numbers + text, totals + dimensionalized)
 
-Dataset name: `fundamentals_fact:sec:v1`
+Dataset name: `fundamentals_fact_sec_v1`
 
 Fact identity key (for as-of selection):
 - `(instrument_id, tag_qname, period_start, period_end, unit, dims_hash, value_kind)`
@@ -206,4 +206,3 @@ Why:
 - Robust statement classification and stable `line_item_code` mapping (provider-neutral tags).
 - Rich identifier mapping (ticker, ISIN/FIGI) in catalog via `identifier_map`.
 - Handling typed dimensions in `dims_hash` with a stable canonicalization strategy.
-
