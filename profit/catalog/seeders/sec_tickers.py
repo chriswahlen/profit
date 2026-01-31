@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
@@ -43,12 +44,14 @@ class SecCompanyTickerSeeder:
         ttl: timedelta = timedelta(days=7),
         fetch_fn: Callable | None = None,
         default_country: str = "US",
+        force: bool = False,
     ) -> None:
         self.cache = cache
         self.allow_network = allow_network
         self.ttl = ttl
         self.fetch_fn = fetch_fn
         self.default_country = default_country
+        self.force = force
 
     def load_raw(self) -> dict:
         user_agent = get_setting(SEC_UA_ENV)
@@ -69,6 +72,17 @@ class SecCompanyTickerSeeder:
         return json.loads(payload)
 
     def seed(self, store: EntityStore) -> SeedResult:
+        if not self.force and self._is_cache_fresh():
+            age = self._cache_age()
+            remaining = max(self.ttl - age, timedelta(0))
+            logging.info(
+                "SEC seeder skipped: cache fresh age=%s ttl=%s next_refresh_in=%s",
+                age,
+                self.ttl,
+                remaining,
+            )
+            return SeedResult(entities_written=0, identifiers_written=0)
+
         raw = self.load_raw()
         store.upsert_providers([(SEC_PROVIDER_ID, "SEC EDGAR", "SEC company tickers feed")])
 
@@ -126,6 +140,20 @@ class SecCompanyTickerSeeder:
             conn.execute("PRAGMA synchronous=NORMAL")
 
         return SeedResult(entities_written=entities_written, identifiers_written=identifiers_written + tombstoned)
+
+    def _is_cache_fresh(self) -> bool:
+        try:
+            self.cache.get(f"urlfetch::{SEC_TICKERS_URL}", ttl=self.ttl)
+            return True
+        except Exception:
+            return False
+
+    def _cache_age(self) -> timedelta:
+        try:
+            entry = self.cache.get(f"urlfetch::{SEC_TICKERS_URL}", ttl=None)
+            return datetime.now(timezone.utc) - entry.created_at
+        except Exception:
+            return timedelta.max
 
     def _tombstone_missing_tickers(self, store: EntityStore, current: set[tuple[str, str]]) -> int:
         """

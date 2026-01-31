@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from profit.cache import FileCache
 from profit.catalog import EntityStore
-from profit.catalog.seeders import SecCompanyTickerSeeder
+from profit.catalog.seeders import SecCompanyTickerSeeder, OpenExchangeRatesCurrencySeeder
 from profit.config import ProfitConfig
 
 
@@ -16,10 +16,26 @@ def seed_sec(store: EntityStore, cache: FileCache, offline: bool, ttl_days: int)
         cache=cache,
         allow_network=not offline,
         ttl=timedelta(days=ttl_days),
+        force=False,
     )
     result = seeder.seed(store)
     logging.info(
         "SEC tickers seeded entities=%s identifiers=%s",
+        result.entities_written,
+        result.identifiers_written,
+    )
+
+
+def seed_oxr(store: EntityStore, cache: FileCache, offline: bool, ttl_days: int) -> None:
+    seeder = OpenExchangeRatesCurrencySeeder(
+        cache=cache,
+        allow_network=not offline,
+        ttl=timedelta(days=ttl_days),
+        force=False,
+    )
+    result = seeder.seed(store)
+    logging.info(
+        "OXR currencies seeded entities=%s identifiers=%s",
         result.entities_written,
         result.identifiers_written,
     )
@@ -42,6 +58,7 @@ def main() -> None:
     store = EntityStore(data_root / "entities.sqlite3")
     cache = FileCache(base_dir=cache_root / "seed_cache")
 
+    seed_oxr(store, cache, args.offline, args.ttl_days)
     seed_sec(store, cache, args.offline, args.ttl_days)
 
 
