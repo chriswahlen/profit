@@ -4,10 +4,13 @@ from .sec_edgar import (
     EdgarSubmissions,
     EdgarFiling,
 )
+from .accession_reader import EdgarAccessionReader, AccessionIndex
 
 __all__ = [
     "EdgarSubmissionsFetcher",
     "EdgarSubmissionsRequest",
     "EdgarSubmissions",
     "EdgarFiling",
+    "EdgarAccessionReader",
+    "AccessionIndex",
 ]

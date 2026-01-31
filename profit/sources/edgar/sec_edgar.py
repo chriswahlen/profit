@@ -10,7 +10,6 @@ provider-aware logging).
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, Mapping, Sequence
@@ -20,14 +19,14 @@ from profit.config import ProfitConfig, get_setting
 from profit.sources.batch_fetcher import BatchFetcher
 from profit.sources.types import Fingerprintable
 from profit.utils.url_fetcher import FetchFn, fetch_url
+from .common import SEC_UA_ENV, normalize_cik
 
 logger = logging.getLogger(__name__)
 
 
 SEC_PROVIDER_ID = "sec:edgar"
-SEC_UA_ENV = "PROFIT_SEC_USER_AGENT"
 SUBMISSIONS_URL_TMPL = "https://data.sec.gov/submissions/CIK{cik}.json"
-DEFAULT_TTL = timedelta(minutes=15)
+DEFAULT_TTL = timedelta(days=1)
 
 
 def _normalize_cik(raw: str | int) -> str:
@@ -46,7 +45,7 @@ class EdgarSubmissionsRequest(Fingerprintable):
     provider_code: str | None = None
 
     def __post_init__(self):
-        norm = _normalize_cik(self.cik)
+        norm = normalize_cik(self.cik)
         object.__setattr__(self, "cik", norm)
         if self.provider_code is None:
             object.__setattr__(self, "provider_code", norm)
