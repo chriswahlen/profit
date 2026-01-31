@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from profit.cache.columnar_store import ColumnarSqliteStore
+from profit.catalog.seeders.stooq_common import iterate_stooq_rows
 from profit.catalog.seeders.stooq_us_equities import StooqUsEquitySeeder
 from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 
@@ -91,38 +91,22 @@ class StooqUsHistorySeeder:
             mic = StooqUsEquitySeeder.MIC_BY_FOLDER.get(venue, "")
 
             logging.info("Stooq US history reading file %s", txt)
-            try:
-                with txt.open("r", newline="") as fh:
-                    reader = csv.reader(fh)
-                    header = next(reader, None)
-                    if not header or len(header) < 9:
-                        continue
-                    for record in reader:
-                        if len(record) < 9:
-                            continue
-                        ticker, per, date_str, _time, o, h, l, c, vol, *rest = record
-                        if per != "D":
-                            continue
-                        try:
-                            ts = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
-                        except ValueError:
-                            continue
-                        instrument_id = self._instrument_id(mic, ticker)
-                        data = {
-                            "open": float(o),
-                            "high": float(h),
-                            "low": float(l),
-                            "close": float(c),
-                            "volume": float(vol),
-                            "openint": float(rest[0]) if rest else 0.0,
-                        }
-                        for field, value in data.items():
-                            sid = self._series_id(instrument_id, field)
-                            buffers.setdefault(sid, []).append((ts, value))
-                        if sum(len(v) for v in buffers.values()) >= 50_000:
-                            flush()
-            except FileNotFoundError:
-                continue
+            for record in iterate_stooq_rows(txt):
+                ts = record["date"]
+                instrument_id = self._instrument_id(mic, record["ticker"])
+                data = {
+                    "open": record["open"],
+                    "high": record["high"],
+                    "low": record["low"],
+                    "close": record["close"],
+                    "volume": record["volume"],
+                    "openint": record["openint"],
+                }
+                for field, value in data.items():
+                    sid = self._series_id(instrument_id, field)
+                    buffers.setdefault(sid, []).append((ts, value))
+                if sum(len(v) for v in buffers.values()) >= 50_000:
+                    flush()
 
         flush()
         return total_points
