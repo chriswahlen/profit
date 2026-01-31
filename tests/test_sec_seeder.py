@@ -30,12 +30,15 @@ def test_sec_seeder_writes_entities_and_identifiers(tmp_path):
     assert result.entities_written == 2
     assert result.identifiers_written == 4
 
-    row = store.conn.execute("SELECT name, country_iso2 FROM entity WHERE entity_id='cik:0000320193'").fetchone()
-    assert row["name"] == "Apple Inc."
+    # Apple entity should be us:com:apple after suffix stripping
+    row = store.conn.execute("SELECT entity_id, name, country_iso2 FROM entity WHERE name='Apple Inc.'").fetchone()
+    assert row["entity_id"].startswith("us:com:apple")
+    apple_id = row["entity_id"]
     assert row["country_iso2"] == "US"
 
     id_row = store.conn.execute(
-        "SELECT scheme, value, provider_id FROM entity_identifier WHERE entity_id='cik:0000320193' ORDER BY scheme"
+        "SELECT scheme, value, provider_id FROM entity_identifier WHERE entity_id=? ORDER BY scheme",
+        (apple_id,),
     ).fetchall()
     schemes = {(r["scheme"], r["value"], r["provider_id"]) for r in id_row}
     assert ("sec:cik", "0000320193", "sec:edgar") in schemes
@@ -52,6 +55,7 @@ def test_sec_seeder_writes_entities_and_identifiers(tmp_path):
     seeder2.seed(store)
 
     row = store.conn.execute(
-        "SELECT active_to FROM entity_identifier WHERE entity_id='cik:0000320193' AND scheme='ticker:us' AND value='AAPL'"
+        "SELECT active_to FROM entity_identifier WHERE entity_id=? AND scheme='ticker:us' AND value='AAPL'",
+        (apple_id,),
     ).fetchone()
     assert row["active_to"] is not None

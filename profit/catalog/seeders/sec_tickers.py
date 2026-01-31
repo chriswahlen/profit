@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
@@ -26,7 +28,7 @@ class SecCompanyTickerSeeder:
     """
     Seed `entity` and `entity_identifier` tables from SEC's company_tickers.json.
 
-    - entity_id: cik:<10-digit>
+    - entity_id: friendly slug `us:com:<name>` (hash suffix on collision)
     - entity_type: company
     - identifiers:
         * scheme='sec:cik' value=<10-digit CIK> provider_id='sec:edgar'
@@ -78,8 +80,9 @@ class SecCompanyTickerSeeder:
         for obj in raw.values():
             cik_str = int(obj["cik_str"])
             ticker = obj.get("ticker") or ""
-            name = obj.get("title") or ""
-            entity_id = f"cik:{cik_str:010d}"
+            raw_name = obj.get("title") or ""
+            name = _strip_state_tags(raw_name)
+            entity_id = self._resolve_entity_id(store, name, f"{cik_str:010d}")
             current_tickers.add((entity_id, ticker))
 
             entities.append(
@@ -167,3 +170,99 @@ class SecCompanyTickerSeeder:
         )
         store.conn.commit()
         return len(missing_updates)
+
+    # ------------------------------------------------------------------
+    def _resolve_entity_id(self, store: EntityStore, name: str, cik: str) -> str:
+        """
+        Return a stable, friendly entity_id derived from name and CIK.
+        - Reuse existing mapping if CIK already present.
+        - Base slug: us:com:<slugified_name> (corporate suffix stripped).
+        - On collision with another issuer, append -<hash8> derived from CIK.
+        """
+        existing = store.find_entity_by_identifier(scheme="sec:cik", value=cik)
+        if existing:
+            return existing
+
+        slug = _slugify_company(name)
+        base = f"us:com:{slug}"
+        if not self._entity_exists(store, base):
+            return base
+
+        hash8 = hashlib.sha1(cik.encode("utf-8")).hexdigest()[:8]
+        candidate = f"{base}-{hash8}"
+        # If even candidate exists (extremely unlikely), keep adding hash chunks.
+        suffix_iter = 1
+        while self._entity_exists(store, candidate):
+            suffix_iter += 1
+            candidate = f"{base}-{hash8}{suffix_iter}"
+        return candidate
+
+    def _entity_exists(self, store: EntityStore, entity_id: str) -> bool:
+        cur = store.conn.execute("SELECT 1 FROM entity WHERE entity_id = ? LIMIT 1", (entity_id,))
+        return cur.fetchone() is not None
+
+
+_SUFFIX_RE = re.compile(r"^(inc|incorporated|corp|corporation|co|company|ltd|llc|plc|sa|ag|nv|gmbh|lp|llp|adr)$", re.IGNORECASE)
+_STATE_TAG_RE = re.compile(r"/(new|al|ak|az|ar|ca|co|ct|de|dc|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)$", re.IGNORECASE)
+_CUSTOM_OVERRIDES = [
+    (re.compile(r"^banco santander", re.IGNORECASE), "banco-santandar"),
+    (re.compile(r"^spdr s&p 500", re.IGNORECASE), "sandp500"),
+    (re.compile(r"^alibaba group holding", re.IGNORECASE), "alibaba"),
+    (re.compile(r"^goldman sachs group", re.IGNORECASE), "goldman-sachs"),
+    (re.compile(r"^1\s*800\s*flowers", re.IGNORECASE), "1800flowers"),
+    (re.compile(r"^1895 bancorp of wisconsin", re.IGNORECASE), "1895-bancorp-of-wisconsin"),
+    (re.compile(r"^3\s*e\s*network technology", re.IGNORECASE), "3-e-network-technology"),
+    (re.compile(r"^aib group", re.IGNORECASE), "aib-group"),
+    (re.compile(r"^ambitions enterprise management", re.IGNORECASE), "ambitions-enterprise-management"),
+    (re.compile(r"^american exceptionalism acquisition", re.IGNORECASE), "american-exceptionalism-acquisition"),
+    (re.compile(r"^pg&e", re.IGNORECASE), "pg-and-e"),
+    (re.compile(r"^cheniere energy partners", re.IGNORECASE), "cheniere-energy-partners"),
+]
+
+
+def _slugify_company(name: str) -> str:
+    """
+    Slugify company name to a readable token:
+    - lowercase
+    - replace & with 'and'
+    - strip punctuation
+    - collapse whitespace/dashes to single dash
+    - drop trailing corporate suffixes (iteratively) and share-class letters
+    - apply known overrides for tricky names
+    """
+    if not name:
+        return "unknown"
+    for pattern, replacement in _CUSTOM_OVERRIDES:
+        if pattern.match(name):
+            return replacement
+    n = name.replace("&", " and ")
+    # strip trailing "& co" variations
+    n = re.sub(r"\s+and\s+co\.?$", "", n, flags=re.IGNORECASE)
+    # collapse dotted acronyms: a.b.c -> abc
+    n = re.sub(r"\b([A-Za-z])(?:\.[A-Za-z])+\.?", lambda m: m.group(0).replace(".", ""), n)
+    # normalize common punctuation to separators
+    n = n.replace("n.v.", " nv ")
+    n = n.replace("N.V.", " nv ")
+    n = re.sub(r"[^A-Za-z0-9\s-]", " ", n)
+    n = re.sub(r"\s+", " ", n).strip().lower()
+    n = n.replace(" ", "-")
+    parts = [p for p in n.split("-") if p]
+    # drop trailing /XX or /NEW style tags
+    if parts and _STATE_TAG_RE.search(name):
+        parts = [p for p in parts if not _STATE_TAG_RE.match("/" + p)]
+    # merge split legal-form tokens like s.a. -> sa, n.v. -> nv
+    if len(parts) >= 2 and parts[-2:] == ["s", "a"]:
+        parts = parts[:-2] + ["sa"]
+    if len(parts) >= 2 and parts[-2:] == ["n", "v"]:
+        parts = parts[:-2] + ["nv"]
+    while parts and _SUFFIX_RE.match(parts[-1]):
+        parts = parts[:-1]
+    if parts and len(parts[-1]) == 1 and parts[-1].isalpha():
+        parts = parts[:-1]
+    if not parts:
+        parts = ["unknown"]
+    return "-".join(parts)
+
+
+def _strip_state_tags(name: str) -> str:
+    return _STATE_TAG_RE.sub("", name).strip()
