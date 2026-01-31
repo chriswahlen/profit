@@ -30,6 +30,29 @@ class StooqDailySeeder:
         "stooq stocks indices": "equity",
     }
 
+    CANONICAL_PREFIX = {
+        "currencies": "FX",
+        "money market": "MM",
+        "indices": "INDEX",
+        "cryptocurrencies": "CRYPTO",
+        "bonds": "BOND",
+    }
+
+    EXCHANGE_SUFFIX_MAP = {
+        "US": "XNAS",
+        "FT": "XLON",
+        "L": "XLON",
+        "DE": "XFRA",
+        "HK": "XHKG",
+        "F": "XPAR",
+        "SW": "XSWX",
+        "AS": "XASE",
+        "B": "XLON",
+        "V": "XSWX",
+        "X": "XAMS",
+        "ST": "XSTO",
+    }
+
     def __init__(
         self,
         store: CatalogStore,
@@ -79,9 +102,8 @@ class StooqDailySeeder:
             parts = [p.lower() for p in relative.parts[:-1]]
             category = "/".join(parts) if parts else "unknown"
             ticker = txt.stem.upper()
-            slug_category = "-".join(p.replace(" ", "-") for p in parts if p)
-            instrument_id = f"stooq:{slug_category}:{ticker.lower()}" if slug_category else f"stooq:{ticker.lower()}"
-            instrument_type = self._guess_type(parts)
+            instrument_id = self._canonical_instrument_id(ticker, parts)
+            instrument_type = self._guess_type(parts, ticker)
             attrs = {"category": category, "path": str(txt)}
 
             yield InstrumentRecord(
@@ -89,19 +111,44 @@ class StooqDailySeeder:
                 instrument_type=instrument_type,
                 provider=self.provider,
                 provider_code=ticker,
-                mic="STOOQ",
+                mic=self._exchange_for_ticker(ticker, parts),
                 currency=None,
-                active_from=datetime.now(timezone.utc),
+                active_from=None,
                 active_to=None,
                 attrs=attrs,
             )
 
-    def _guess_type(self, parts: list[str]) -> str:
+    def _guess_type(self, parts: list[str], ticker: str) -> str:
+        if ticker.startswith("^"):
+            return "synthetic"
         for part in parts:
             cleaned = part.replace("-", " ")
             if cleaned in self.TYPE_MAP:
                 return self.TYPE_MAP[cleaned]
         return "unknown"
+
+    def _canonical_instrument_id(self, ticker: str, parts: list[str]) -> str:
+        if "." in ticker:
+            base, suffix = ticker.split(".", 1)
+            exchange = self.EXCHANGE_SUFFIX_MAP.get(suffix.upper(), suffix.upper())
+            return f"{exchange}|{base}"
+
+        for part in reversed(parts):
+            if part in self.CANONICAL_PREFIX:
+                prefix = self.CANONICAL_PREFIX[part]
+                return f"{prefix}|{ticker}"
+        return f"STOOQ|{ticker}"
+
+    def _exchange_for_ticker(self, ticker: str, parts: list[str]) -> str:
+        if "cryptocurrencies" in parts:
+            return "CRYPTO"
+        if "." in ticker:
+            _, suffix = ticker.split(".", 1)
+            return self.EXCHANGE_SUFFIX_MAP.get(suffix.upper(), suffix.upper())
+        for part in reversed(parts):
+            if part in self.EXCHANGE_SUFFIX_MAP.values():
+                return part
+        return ""
 
     def _find_base_path(self) -> Path | None:
         candidates = [

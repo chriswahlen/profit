@@ -36,7 +36,7 @@ def intersect_window(record: InstrumentRecord, start: datetime, end: datetime) -
     if start > end:
         raise ValueError("start must be <= end")
 
-    active_start = record.active_from
+    active_start = record.active_from or start
     active_end = record.active_to
     ae = active_end or end  # use requested end when open-ended for comparison
 
@@ -75,7 +75,7 @@ def lookup_and_clip(
     if li.is_empty and hard_fail:
         raise ValueError(
             f"Requested window {start.date()}–{end.date()} is outside lifecycle "
-            f"{rec.active_from.date()}–{(rec.active_to.date() if rec.active_to else 'open')}"
+            f"{rec.active_from.date() if rec.active_from else 'unknown'}–{(rec.active_to.date() if rec.active_to else 'open')}"
         )
     return li
 

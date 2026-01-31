@@ -19,5 +19,5 @@ def test_stooq_seeder_registers_instrument(tmp_path):
 
     instr = catalog.get_instrument("stooq", "USD")
     assert instr is not None
-    assert instr.instrument_id.endswith("usd")
+    assert instr.instrument_id == "FX|USD"
     assert instr.attrs["category"].startswith("world/")

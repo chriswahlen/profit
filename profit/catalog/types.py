@@ -32,7 +32,7 @@ class InstrumentRecord:
     provider_code: str
     mic: str | None
     currency: str | None
-    active_from: datetime
+    active_from: datetime | None
     active_to: datetime | None
     attrs: dict[str, Any]
 

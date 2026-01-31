@@ -16,6 +16,10 @@ def _dt_to_str(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+def _maybe_dt_to_str(dt: datetime | None) -> str | None:
+    return _dt_to_str(dt) if dt is not None else None
+
+
 def _str_to_dt(val: str) -> datetime:
     return datetime.fromisoformat(val)
 
@@ -53,8 +57,7 @@ class CatalogStore:
                 currency        TEXT,
                 status          TEXT NOT NULL DEFAULT 'active',
                 active_from     TEXT,
-                active_to       TEXT,
-                attrs           TEXT
+                active_to       TEXT
             );
 
             -- Provider mapping
@@ -62,9 +65,7 @@ class CatalogStore:
                 provider      TEXT NOT NULL,
                 provider_code TEXT NOT NULL,
                 instrument_id TEXT NOT NULL REFERENCES instrument(instrument_id),
-                mic           TEXT,
-                currency      TEXT,
-                active_from   TEXT NOT NULL,
+                active_from   TEXT,
                 active_to     TEXT,
                 last_seen     TEXT NOT NULL,
                 attrs         TEXT,
@@ -98,27 +99,13 @@ class CatalogStore:
         Upsert instrument rows; returns count written.
         """
         now = last_seen or datetime.now(timezone.utc)
-        rows = []
-        for r in records:
-            rows.append(
-                (
-                    r.instrument_id,
-                    r.instrument_type,
-                    r.provider,
-                    r.provider_code,
-                    r.mic,
-                    r.currency,
-                    _dt_to_str(r.active_from),
-                    _dt_to_str(r.active_to) if r.active_to else None,
-                    _dt_to_str(now),
-                    json.dumps(r.attrs or {}),
-                )
-            )
-        if not rows:
+        records = list(records)
+        if not records:
             return 0
         cur = self.conn.cursor()
         # Ensure instruments exist globally.
         instrument_rows = []
+        provider_rows = []
         for r in records:
             instrument_rows.append(
                 (
@@ -129,8 +116,18 @@ class CatalogStore:
                     r.mic,
                     r.currency,
                     "active",
-                    _dt_to_str(r.active_from),
-                    _dt_to_str(r.active_to) if r.active_to else None,
+                    _maybe_dt_to_str(r.active_from),
+                    _maybe_dt_to_str(r.active_to),
+                )
+            )
+            provider_rows.append(
+                (
+                    r.instrument_id,
+                    r.provider,
+                    r.provider_code,
+                    _maybe_dt_to_str(r.active_from),
+                    _maybe_dt_to_str(r.active_to),
+                    _dt_to_str(now),
                     json.dumps(r.attrs or {}),
                 )
             )
@@ -138,9 +135,9 @@ class CatalogStore:
             """
             INSERT INTO instrument (
                 instrument_id, instrument_type, entity_id, description, mic_primary, currency,
-                status, active_from, active_to, attrs
+                status, active_from, active_to
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(instrument_id) DO UPDATE SET
                 instrument_type=excluded.instrument_type,
                 mic_primary=COALESCE(excluded.mic_primary, instrument.mic_primary),
@@ -149,38 +146,19 @@ class CatalogStore:
                 active_to=CASE
                     WHEN instrument.active_to IS NOT NULL AND excluded.active_to IS NULL THEN instrument.active_to
                     ELSE COALESCE(excluded.active_to, instrument.active_to)
-                END,
-                attrs=excluded.attrs
+                END
             """,
             instrument_rows,
         )
-        # Provider mapping
-        provider_rows = []
-        for r in records:
-            provider_rows.append(
-                (
-                    r.instrument_id,
-                    r.provider,
-                    r.provider_code,
-                    r.mic,
-                    r.currency,
-                    _dt_to_str(r.active_from),
-                    _dt_to_str(r.active_to) if r.active_to else None,
-                    _dt_to_str(now),
-                    json.dumps(r.attrs or {}),
-                )
-            )
         cur.executemany(
             """
             INSERT INTO instrument_provider_map (
                 instrument_id, provider, provider_code,
-                mic, currency, active_from, active_to, last_seen, attrs
+                active_from, active_to, last_seen, attrs
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider, provider_code) DO UPDATE SET
                 instrument_id=excluded.instrument_id,
-                mic=excluded.mic,
-                currency=excluded.currency,
                 -- Preserve earliest known active_from (backfill if earlier is provided).
                 active_from=MIN(instrument_provider_map.active_from, excluded.active_from),
                 -- If symbol reappears, clear tombstone; otherwise keep existing active_to.
@@ -195,7 +173,7 @@ class CatalogStore:
             provider_rows,
         )
         self.conn.commit()
-        return len(rows)
+        return len(records)
 
     def mark_missing_as_inactive(self, *, provider: str, seen_at: datetime, grace: float = 0.0) -> int:
         """
@@ -241,7 +219,7 @@ class CatalogStore:
             params.extend([like, like])
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         sql = f"""
-        SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, ipm.mic, ipm.currency,
+        SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, i.mic_primary AS mic, i.currency,
                ipm.active_from, ipm.active_to, ipm.attrs
         FROM instrument_provider_map ipm
         LEFT JOIN instrument i ON ipm.instrument_id = i.instrument_id
@@ -256,7 +234,7 @@ class CatalogStore:
     def get_instrument(self, provider: str, provider_code: str) -> InstrumentRecord | None:
         cur = self.conn.execute(
             """
-            SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, ipm.mic, ipm.currency,
+            SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, i.mic_primary AS mic, i.currency,
                    ipm.active_from, ipm.active_to, ipm.attrs
             FROM instrument_provider_map ipm
             LEFT JOIN instrument i ON ipm.instrument_id = i.instrument_id
@@ -278,7 +256,7 @@ class CatalogStore:
             provider_code=row["provider_code"],
             mic=row["mic"],
             currency=row["currency"],
-            active_from=_str_to_dt(row["active_from"]),
+            active_from=_str_to_dt(row["active_from"]) if row["active_from"] else None,
             active_to=_str_to_dt(row["active_to"]) if row["active_to"] else None,
             attrs=parsed_attrs,
         )
