@@ -38,12 +38,15 @@ class EntityStore:
     older-asof conflicting writes are rejected to keep ingestion deterministic.
     """
 
-    def __init__(self, db_path: Path, *, readonly: bool = False) -> None:
+    def __init__(self, db_path: Path, *, readonly: bool = False, conn: sqlite3.Connection | None = None) -> None:
         self.db_path = Path(db_path)
-        if not readonly:
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        uri = f"file:{self.db_path.as_posix()}" + ("?mode=ro" if readonly else "")
-        self.conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+        self._owns_conn = conn is None
+        if conn is None:
+            if not readonly:
+                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            uri = f"file:{self.db_path.as_posix()}" + ("?mode=ro" if readonly else "")
+            conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+        self.conn = conn
         self.conn.row_factory = sqlite3.Row
         if not readonly:
             self.ensure_schema()
@@ -104,6 +107,10 @@ class EntityStore:
         """
         )
         self.conn.commit()
+
+    def close(self) -> None:
+        if getattr(self, "_owns_conn", False):
+            self.conn.close()
 
     # --- Provider -----------------------------------------------------
     def upsert_providers(self, providers: Iterable[tuple[str, str | None, str | None]]) -> int:

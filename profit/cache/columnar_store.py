@@ -168,22 +168,6 @@ class ColumnarSqliteStore:
             high_water_ts_us
         FROM __col_series__
         """
-    _SELECT_ALL_SERIES_SQL = """
-        SELECT
-            series_id,
-            instrument_id,
-            dataset,
-            field,
-            step_us,
-            grid_origin_ts_us,
-            window_points,
-            compression,
-            offsets_enabled,
-            checksum_enabled,
-            sentinel_f64_bits,
-            sentinel_unfetched_f64_bits
-        FROM __col_series__
-        """
 
     DEFAULT_PENDING_LIMIT = 32
 
@@ -191,19 +175,24 @@ class ColumnarSqliteStore:
         self,
         db_path: Optional[Path] = None,
         *,
+        conn: sqlite3.Connection | None = None,
         pending_limit: int | None = None,
         dedupe_pending: bool = False,
     ) -> None:
-        self.db_path = Path(db_path) if db_path else _default_db_path()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # Explicitly size the statement cache (default 128) to favor reuse of our
-        # hot statements in write/read paths.
-        self._conn = sqlite3.connect(self.db_path, cached_statements=256)
-        self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._owns_conn = conn is None
+        if conn is None:
+            self.db_path = Path(db_path) if db_path else _default_db_path()
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.db_path, cached_statements=256)
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        else:
+            self.db_path = Path(db_path) if db_path else self._extract_db_path(conn)
+        self._conn = conn
         self._cursor_cache: dict[str, sqlite3.Cursor] = {}
         self._pending_slices: list[tuple[int, int, bytes, bytes, bytes, int]] = []
+        self._pending_high_water: dict[int, int] = {}
         self._pending_limit = pending_limit if pending_limit is not None else self.DEFAULT_PENDING_LIMIT
         self._dedupe_pending = dedupe_pending
         self._series_cache: dict[int, SeriesConfig] = {}
@@ -452,6 +441,18 @@ class ColumnarSqliteStore:
 
         Mode is one of PASSIVE|FULL|RESTART|TRUNCATE (case-insensitive).
         """
+        # Use a fresh connection when we don't own the shared connection to avoid
+        # conflicting with in-flight statements on the primary handle.
+        if not getattr(self, "_owns_conn", True) and self.db_path is not None:
+            tmp_conn = sqlite3.connect(self.db_path)
+            try:
+                tmp_conn.execute("PRAGMA busy_timeout=5000")
+                cur = tmp_conn.cursor()
+                cur.execute(f"PRAGMA wal_checkpoint({mode})")
+                row = cur.fetchone()
+                return (int(row[0]), int(row[1]), int(row[2]))  # type: ignore[index]
+            finally:
+                tmp_conn.close()
         cur = self._cursor("wal_checkpoint")
         cur.execute(f"PRAGMA wal_checkpoint({mode})")
         row = cur.fetchone()
@@ -482,7 +483,8 @@ class ColumnarSqliteStore:
                 cur.close()
             except Exception:
                 pass
-        self._conn.close()
+        if getattr(self, "_owns_conn", True):
+            self._conn.close()
 
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
@@ -501,6 +503,9 @@ class ColumnarSqliteStore:
             ts_us = _dt_to_us(ts)
             if ts_us < cfg.grid_origin_ts_us:
                 raise ValueError("timestamp is before grid origin")
+            prev_hw = self._pending_high_water.get(series_id)
+            if prev_hw is None or ts_us > prev_hw:
+                self._pending_high_water[series_id] = ts_us
 
             # Assign the point to the fixed-step bucket containing ts_us.
             rel_us = ts_us - cfg.grid_origin_ts_us
@@ -871,6 +876,7 @@ class ColumnarSqliteStore:
                 self._SLICE_INSERT_SQL,
                 self._pending_slices,
             )
+            self._apply_pending_high_water()
             if not in_tx:
                 self._conn.commit()
         except Exception:
@@ -892,6 +898,31 @@ class ColumnarSqliteStore:
         if pending is not None:
             return pending
         return self._load_or_init_slice(cfg, slice_start_index, require_existing=require_existing)
+
+    def _extract_db_path(self, conn: sqlite3.Connection) -> Path | None:
+        try:
+            cur = conn.execute("PRAGMA database_list")
+            for row in cur.fetchall():
+                if row[1] == "main" and row[2]:
+                    return Path(row[2])
+        except Exception:
+            return None
+        return None
+
+    def _apply_pending_high_water(self) -> None:
+        if not self._pending_high_water:
+            return
+        cur = self._cursor("update_high_water")
+        for series_id, ts_us in self._pending_high_water.items():
+            cfg = self.get_series(series_id)
+            if cfg.high_water_ts_us is not None and ts_us <= cfg.high_water_ts_us:
+                continue
+            cur.execute(
+                "UPDATE __col_series__ SET high_water_ts_us = ? WHERE series_id = ?",
+                (int(ts_us), int(series_id)),
+            )
+            self._series_cache[series_id] = replace(cfg, high_water_ts_us=int(ts_us))
+        self._pending_high_water.clear()
 
 
 def _is_bitmatch(value: float, bits: int) -> bool:
