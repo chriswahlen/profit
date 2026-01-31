@@ -155,6 +155,21 @@ class CatalogStore:
             instrument_rows,
         )
         # Provider mapping
+        provider_rows = []
+        for r in records:
+            provider_rows.append(
+                (
+                    r.instrument_id,
+                    r.provider,
+                    r.provider_code,
+                    r.mic,
+                    r.currency,
+                    _dt_to_str(r.active_from),
+                    _dt_to_str(r.active_to) if r.active_to else None,
+                    _dt_to_str(now),
+                    json.dumps(r.attrs or {}),
+                )
+            )
         cur.executemany(
             """
             INSERT INTO instrument_provider_map (
@@ -177,7 +192,7 @@ class CatalogStore:
                 last_seen=excluded.last_seen,
                 attrs=excluded.attrs;
             """,
-            rows,
+            provider_rows,
         )
         self.conn.commit()
         return len(rows)
@@ -226,11 +241,12 @@ class CatalogStore:
             params.extend([like, like])
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         sql = f"""
-        SELECT instrument_id, instrument_type, provider, provider_code, mic, currency,
-               active_from, active_to, attrs
-        FROM instrument_provider_map
+        SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, ipm.mic, ipm.currency,
+               ipm.active_from, ipm.active_to, ipm.attrs
+        FROM instrument_provider_map ipm
+        LEFT JOIN instrument i ON ipm.instrument_id = i.instrument_id
         {where}
-        ORDER BY provider, provider_code COLLATE NOCASE
+        ORDER BY ipm.provider, ipm.provider_code COLLATE NOCASE
         LIMIT ? OFFSET ?;
         """
         params.extend([limit, offset])
@@ -240,10 +256,11 @@ class CatalogStore:
     def get_instrument(self, provider: str, provider_code: str) -> InstrumentRecord | None:
         cur = self.conn.execute(
             """
-            SELECT instrument_id, instrument_type, provider, provider_code, mic, currency,
-                   active_from, active_to, attrs
-            FROM instrument_provider_map
-            WHERE provider = ? AND provider_code = ?
+            SELECT ipm.instrument_id, i.instrument_type, ipm.provider, ipm.provider_code, ipm.mic, ipm.currency,
+                   ipm.active_from, ipm.active_to, ipm.attrs
+            FROM instrument_provider_map ipm
+            LEFT JOIN instrument i ON ipm.instrument_id = i.instrument_id
+            WHERE ipm.provider = ? AND ipm.provider_code = ?
             """,
             (provider, provider_code),
         )

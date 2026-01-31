@@ -51,7 +51,7 @@ def test_sec_seeder_writes_entities_and_identifiers(tmp_path):
         }
         return type("Resp", (), {"status": 200, "body": json.dumps(sample).encode(), "headers": {}})()
 
-    seeder2 = SecCompanyTickerSeeder(cache=cache, allow_network=False, fetch_fn=_mock_fetch_drop)
+    seeder2 = SecCompanyTickerSeeder(cache=cache, allow_network=False, fetch_fn=_mock_fetch_drop, force=True)
     seeder2.seed(store)
 
     row = store.conn.execute(

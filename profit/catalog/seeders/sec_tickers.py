@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import hashlib
-import re
 import logging
+import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
 
 from profit.cache import FileCache
 from profit.catalog import EntityIdentifierRecord, EntityRecord, EntityStore
+from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 from profit.utils.url_fetcher import fetch_url
 from profit.config import get_setting
 
@@ -72,11 +74,12 @@ class SecCompanyTickerSeeder:
         return json.loads(payload)
 
     def seed(self, store: EntityStore) -> SeedResult:
-        if not self.force and self._is_cache_fresh():
-            age = self._cache_age()
+        ensure_seed_metadata(store.conn)
+        if not self.force and self._should_skip(store.conn):
+            age = self._last_run_age(store.conn)
             remaining = max(self.ttl - age, timedelta(0))
             logging.info(
-                "SEC seeder skipped: cache fresh age=%s ttl=%s next_refresh_in=%s",
+                "SEC seeder skipped: last_run_age=%s ttl=%s next_refresh_in=%s",
                 age,
                 self.ttl,
                 remaining,
@@ -132,6 +135,7 @@ class SecCompanyTickerSeeder:
             entities_written = store.upsert_entities(entities)
             identifiers_written = store.upsert_identifiers(identifiers)
             tombstoned = self._tombstone_missing_tickers(store, current_tickers)
+            self._bump_metadata(store.conn)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -141,19 +145,20 @@ class SecCompanyTickerSeeder:
 
         return SeedResult(entities_written=entities_written, identifiers_written=identifiers_written + tombstoned)
 
-    def _is_cache_fresh(self) -> bool:
-        try:
-            self.cache.get(f"urlfetch::{SEC_TICKERS_URL}", ttl=self.ttl)
-            return True
-        except Exception:
+    def _should_skip(self, conn: sqlite3.Connection) -> bool:  # type: ignore[name-defined]
+        last = read_seed_metadata(conn, "sec_tickers")
+        if last is None:
             return False
+        return datetime.now(timezone.utc) - last < self.ttl
 
-    def _cache_age(self) -> timedelta:
-        try:
-            entry = self.cache.get(f"urlfetch::{SEC_TICKERS_URL}", ttl=None)
-            return datetime.now(timezone.utc) - entry.created_at
-        except Exception:
+    def _last_run_age(self, conn: sqlite3.Connection) -> timedelta:  # type: ignore[name-defined]
+        last = read_seed_metadata(conn, "sec_tickers")
+        if last is None:
             return timedelta.max
+        return datetime.now(timezone.utc) - last
+
+    def _bump_metadata(self, conn: sqlite3.Connection) -> None:  # type: ignore[name-defined]
+        write_seed_metadata(conn, "sec_tickers", datetime.now(timezone.utc))
 
     def _tombstone_missing_tickers(self, store: EntityStore, current: set[tuple[str, str]]) -> int:
         """

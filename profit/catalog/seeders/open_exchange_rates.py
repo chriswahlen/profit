@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from profit.cache import FileCache
 from profit.catalog import EntityIdentifierRecord, EntityRecord, EntityStore
+from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 from profit.utils.url_fetcher import fetch_url
 
 
@@ -62,11 +64,12 @@ class OpenExchangeRatesCurrencySeeder:
         return json.loads(payload)
 
     def seed(self, store: EntityStore) -> SeedResult:
-        if not self.force and self._is_cache_fresh():
-            age = self._cache_age()
+        ensure_seed_metadata(store.conn)
+        if not self.force and self._should_skip(store.conn):
+            age = self._last_run_age(store.conn)
             remaining = max(self.ttl - age, timedelta(0))
             logging.info(
-                "OXR seeder skipped: cache fresh age=%s ttl=%s next_refresh_in=%s",
+                "OXR seeder skipped: last_run_age=%s ttl=%s next_refresh_in=%s",
                 age,
                 self.ttl,
                 remaining,
@@ -101,6 +104,7 @@ class OpenExchangeRatesCurrencySeeder:
 
         entities_written = store.upsert_entities(entities)
         identifiers_written = store.upsert_identifiers(identifiers)
+        self._bump_metadata(store.conn)
         return SeedResult(entities_written=entities_written, identifiers_written=identifiers_written)
 
     def _is_cache_fresh(self) -> bool:
@@ -116,3 +120,18 @@ class OpenExchangeRatesCurrencySeeder:
             return datetime.now(timezone.utc) - entry.created_at
         except Exception:
             return timedelta.max
+
+    def _should_skip(self, conn: sqlite3.Connection) -> bool:
+        last = read_seed_metadata(conn, "oxr_currencies")
+        if last is None:
+            return False
+        return datetime.now(timezone.utc) - last < self.ttl
+
+    def _last_run_age(self, conn: sqlite3.Connection) -> timedelta:
+        last = read_seed_metadata(conn, "oxr_currencies")
+        if last is None:
+            return timedelta.max
+        return datetime.now(timezone.utc) - last
+
+    def _bump_metadata(self, conn: sqlite3.Connection) -> None:
+        write_seed_metadata(conn, "oxr_currencies", datetime.now(timezone.utc))
