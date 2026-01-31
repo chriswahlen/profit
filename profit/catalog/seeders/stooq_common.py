@@ -55,6 +55,11 @@ def guess_type(parts: Iterable[str], ticker: str) -> str:
 
 
 def canonical_instrument_id(ticker: str, parts: list[str]) -> str:
+    # Crypto: prefer explicit category over suffix-based routing (e.g., BTC.V -> CRYPTO|BTC).
+    if "cryptocurrencies" in parts:
+        base = ticker.split(".", 1)[0]
+        return f"CRYPTO|{base}"
+
     if "." in ticker:
         base, suffix = ticker.split(".", 1)
         exchange = EXCHANGE_SUFFIX_MAP.get(suffix.upper(), suffix.upper())
