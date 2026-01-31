@@ -43,6 +43,7 @@ IGNORED_EXTENSIONS = {
     ".jsonld",
     ".webmanifest",
     ".rdf",
+    ".xsd",
 }
 
 IGNORED_FILES = {"metalink.json", "metalinks.json"}
