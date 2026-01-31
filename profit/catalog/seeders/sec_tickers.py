@@ -11,6 +11,7 @@ from typing import Callable, Iterable
 
 from profit.cache import FileCache
 from profit.catalog import EntityIdentifierRecord, EntityRecord, EntityStore
+from profit.catalog.store import CatalogStore
 from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 from profit.utils.url_fetcher import fetch_url
 from profit.config import get_setting
@@ -25,6 +26,7 @@ SEC_UA_ENV = "PROFIT_SEC_USER_AGENT"
 class SeedResult:
     entities_written: int
     identifiers_written: int
+    instrument_links_written: int = 0
 
 
 class SecCompanyTickerSeeder:
@@ -73,7 +75,7 @@ class SecCompanyTickerSeeder:
         )
         return json.loads(payload)
 
-    def seed(self, store: EntityStore) -> SeedResult:
+    def seed(self, store: EntityStore, catalog: CatalogStore | None = None) -> SeedResult:
         ensure_seed_metadata(store.conn)
         if not self.force and self._should_skip(store.conn):
             age = self._last_run_age(store.conn)
@@ -84,7 +86,7 @@ class SecCompanyTickerSeeder:
                 self.ttl,
                 remaining,
             )
-            return SeedResult(entities_written=0, identifiers_written=0)
+            return SeedResult(entities_written=0, identifiers_written=0, instrument_links_written=0)
 
         raw = self.load_raw()
         store.upsert_providers([(SEC_PROVIDER_ID, "SEC EDGAR", "SEC company tickers feed")])
@@ -143,7 +145,15 @@ class SecCompanyTickerSeeder:
         finally:
             conn.execute("PRAGMA synchronous=NORMAL")
 
-        return SeedResult(entities_written=entities_written, identifiers_written=identifiers_written + tombstoned)
+        links_written = 0
+        if catalog is not None:
+            links_written = link_sec_tickers_to_instruments(store, catalog)
+
+        return SeedResult(
+            entities_written=entities_written,
+            identifiers_written=identifiers_written + tombstoned,
+            instrument_links_written=links_written,
+        )
 
     def _should_skip(self, conn: sqlite3.Connection) -> bool:  # type: ignore[name-defined]
         last = read_seed_metadata(conn, "sec_tickers")
@@ -230,6 +240,69 @@ class SecCompanyTickerSeeder:
     def _entity_exists(self, store: EntityStore, entity_id: str) -> bool:
         cur = store.conn.execute("SELECT 1 FROM entity WHERE entity_id = ? LIMIT 1", (entity_id,))
         return cur.fetchone() is not None
+
+
+def _parse_dt(val: str | None) -> datetime | None:
+    if not val:
+        return None
+    return datetime.fromisoformat(val)
+
+
+def link_sec_tickers_to_instruments(
+    entity_store: EntityStore,
+    catalog_store: CatalogStore,
+    *,
+    instrument_provider: str = "stooq",
+    relation_type: str = "issuer",
+) -> int:
+    """
+    Join SEC ticker identifiers to catalog instruments and populate instrument_entity.
+
+    Strategy: match ticker to the provider_code shape written by Stooq US equities
+    (<TICKER>.US). If no instrument match is found, the row is skipped.
+    """
+    cur = entity_store.conn.execute(
+        """
+        SELECT entity_id, value AS ticker, active_from, active_to, last_seen
+        FROM entity_identifier
+        WHERE scheme = 'ticker:us' AND provider_id = ?
+        """,
+        (SEC_PROVIDER_ID,),
+    )
+
+    rows = cur.fetchall()
+    if not rows:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    links: list[tuple[str, str, str, datetime, datetime | None]] = []
+
+    for row in rows:
+        ticker = (row["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
+        provider_code = f"{ticker}.US"
+        instrument = catalog_store.get_instrument(instrument_provider, provider_code)
+        if instrument is None:
+            continue
+
+        active_from = _parse_dt(row["active_from"]) or instrument.active_from or now
+        active_to = _parse_dt(row["active_to"]) or instrument.active_to
+
+        links.append(
+            (
+                instrument.instrument_id,
+                row["entity_id"],
+                relation_type,
+                active_from,
+                active_to,
+            )
+        )
+
+    if not links:
+        return 0
+
+    return catalog_store.upsert_instrument_entities(links)
 
 
 _SUFFIX_RE = re.compile(r"^(inc|incorporated|corp|corporation|co|company|ltd|llc|plc|sa|ag|nv|gmbh|lp|llp|adr)$", re.IGNORECASE)

@@ -177,6 +177,44 @@ class CatalogStore:
         self.conn.commit()
         return len(records)
 
+    def upsert_instrument_entities(
+        self,
+        records: Iterable[tuple[str, str, str, datetime, datetime | None]],
+    ) -> int:
+        """Insert or update instrument/entity relations.
+
+        records: iterable of (instrument_id, entity_id, relation_type, active_from, active_to)
+        """
+        rows = []
+        for instrument_id, entity_id, relation_type, active_from, active_to in records:
+            rows.append(
+                (
+                    instrument_id,
+                    entity_id,
+                    relation_type,
+                    _dt_to_str(active_from),
+                    _maybe_dt_to_str(active_to),
+                )
+            )
+
+        if not rows:
+            return 0
+
+        cur = self.conn.cursor()
+        cur.executemany(
+            """
+            INSERT INTO instrument_entity (
+                instrument_id, entity_id, relation_type, active_from, active_to
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(instrument_id, entity_id, relation_type, active_from) DO UPDATE SET
+                active_to=excluded.active_to
+            """,
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
     def mark_missing_as_inactive(self, *, provider: str, seen_at: datetime, grace: float = 0.0) -> int:
         """
         Mark symbols not seen in the latest snapshot as inactive by setting active_to.

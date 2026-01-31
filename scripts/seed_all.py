@@ -21,18 +21,19 @@ from profit.catalog.store import CatalogStore
 from profit.config import ProfitConfig
 
 
-def seed_sec(store: EntityStore, cache: FileCache, offline: bool, ttl_days: int, force: bool) -> None:
+def seed_sec(store: EntityStore, catalog: CatalogStore, cache: FileCache, offline: bool, ttl_days: int, force: bool) -> None:
     seeder = SecCompanyTickerSeeder(
         cache=cache,
         allow_network=not offline,
         ttl=timedelta(days=ttl_days),
         force=force,
     )
-    result = seeder.seed(store)
+    result = seeder.seed(store, catalog=catalog)
     logging.info(
-        "SEC tickers seeded entities=%s identifiers=%s",
+        "SEC tickers seeded entities=%s identifiers=%s instrument_links=%s",
         result.entities_written,
         result.identifiers_written,
+        result.instrument_links_written,
     )
 
 
@@ -107,6 +108,13 @@ def main() -> None:
     parser.add_argument("--cache-root", type=Path, default=None, help="Override PROFIT_CACHE_ROOT")
     parser.add_argument("--log-level", default="INFO", help="Logging level (default INFO)")
     parser.add_argument("--force", action="store_true", help="Force re-seed even when cache is fresh")
+    parser.add_argument(
+        "--force-only",
+        action="append",
+        dest="force_only",
+        default=[],
+        help="Force only specific seeders (repeatable or comma-separated); overrides TTL just for those.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
@@ -125,13 +133,19 @@ def main() -> None:
     catalog = CatalogStore(profit_db, conn=shared_conn)
     sql_store = ColumnarSqliteStore(conn=shared_conn)
 
-    seed_oxr(store, cache, args.offline, args.ttl_days, force=args.force)
+    force_targets = {item.strip().lower() for entry in args.force_only for item in entry.split(",") if item.strip()}
+    force_all = args.force
+
+    def _force(name: str) -> bool:
+        return force_all or name in force_targets
+
+    seed_oxr(store, cache, args.offline, args.ttl_days, force=_force("oxr"))
     register_stooq_provider(store)
-    seed_stooq_us(catalog, data_root, force=args.force, ttl_days=args.ttl_days)
-    seed_stooq_us_history(sql_store, data_root, force=args.force, ttl_days=args.ttl_days)
-    seed_stooq_world_history(sql_store, data_root, force=args.force, ttl_days=args.ttl_days)
-    seed_stooq(catalog, data_root, force=args.force, ttl_days=args.ttl_days)
-    seed_sec(store, cache, args.offline, args.ttl_days, force=args.force)
+    seed_stooq_us(catalog, data_root, force=_force("stooq_us"), ttl_days=args.ttl_days)
+    seed_stooq_us_history(sql_store, data_root, force=_force("stooq_us_history"), ttl_days=args.ttl_days)
+    seed_stooq_world_history(sql_store, data_root, force=_force("stooq_world_history"), ttl_days=args.ttl_days)
+    seed_stooq(catalog, data_root, force=_force("stooq"), ttl_days=args.ttl_days)
+    seed_sec(store, catalog, cache, args.offline, args.ttl_days, force=_force("sec"))
     shared_conn.close()
 
 
