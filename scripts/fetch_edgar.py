@@ -10,7 +10,7 @@ from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.edgar import EdgarDatabase
 from profit.edgar.zip_utils import expand_zip_archive
-from profit.edgar.xml_parser import parse_xbrl
+from profit.edgar.xml_parser import ParsedXbrl, parse_xbrl
 from profit.sources.edgar import (
     EdgarSubmissionsFetcher,
     EdgarSubmissionsRequest,
@@ -176,11 +176,7 @@ def main() -> None:
                             try:
                                 parsed = parse_xbrl(entry_payload)
                                 logging.info("parsed xml file=%s facts=%d unparsed=%d", entry_name, len(parsed.facts), len(parsed.unparsed))
-                                print(f"[XML] {entry_name} facts={len(parsed.facts)} unparsed={len(parsed.unparsed)}")
-                                for fact in parsed.facts[:5]:
-                                    print(f"[XML] {entry_name} {fact.name} context={fact.context_ref} unit={fact.unit_ref} value={fact.value}")
-                                if parsed.unparsed:
-                                    print(f"[XML] {entry_name} unparsed_count={len(parsed.unparsed)}")
+                                _emit_parse_summary(entry_name, parsed)
                             except Exception as exc:
                                 logging.warning("xml parse failed file=%s err=%s", entry_name, exc)
                         edgar_db.store_file(args.accession, name, b"")
@@ -195,15 +191,21 @@ def main() -> None:
                         try:
                             parsed = parse_xbrl(payload)
                             logging.info("parsed xml file=%s facts=%d unparsed=%d", name, len(parsed.facts), len(parsed.unparsed))
-                            print(f"[XML] {name} facts={len(parsed.facts)} unparsed={len(parsed.unparsed)}")
-                            for fact in parsed.facts[:5]:
-                                print(f"[XML] {name} {fact.name} context={fact.context_ref} unit={fact.unit_ref} value={fact.value}")
-                            if parsed.unparsed:
-                                print(f"[XML] {name} unparsed_count={len(parsed.unparsed)}")
+                            _emit_parse_summary(name, parsed)
                         except Exception as exc:
                             logging.warning("xml parse failed file=%s err=%s", name, exc)
     finally:
         edgar_db.close()
+
+
+def _emit_parse_summary(name: str, parsed: ParsedXbrl) -> None:
+    print(f"[XML] {name} facts={len(parsed.facts)} unparsed={len(parsed.unparsed)}")
+    for fact in parsed.facts[:5]:
+        print(f"[XML] {name} {fact.name} context={fact.context_ref} unit={fact.unit_ref} value={fact.value}")
+    if parsed.unparsed:
+        print(f"[XML] {name} unparsed_count={len(parsed.unparsed)}")
+        for idx, item in enumerate(parsed.unparsed, start=1):
+            print(f"[XML] {name} unparsed[{idx}] {item.get('tag')} text={item.get('text')}")
 
 
 if __name__ == "__main__":

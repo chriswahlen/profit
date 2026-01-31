@@ -4,11 +4,20 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Dict, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 
+from profit.utils.html_to_md import html_to_markdown
 
 logger = logging.getLogger(__name__)
+
+
+HTML_SKIP_TAGS = {"b", "i", "span", "strong", "em", "u", "a", "p", "div", "br", "ul", "ol", "li"}
+
+
+def _looks_like_html(text: str) -> bool:
+    return "<" in text and ">" in text
 
 
 @dataclass(frozen=True)
@@ -57,7 +66,21 @@ def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
             continue
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         attrs = {k: v for k, v in elem.attrib.items()}
-        text = elem.text.strip() if elem.text else ""
+        text_raw = "".join(elem.itertext()).strip()
+        if tag.lower() in HTML_SKIP_TAGS:
+            continue
+        text = text_raw
+        inner_html = ""
+        raw_xml = ET.tostring(elem, encoding="unicode", method="xml")
+        pattern = rf"<[^>]+?>(.*)</{re.escape(tag)}>$"
+        match = re.search(pattern, raw_xml, re.DOTALL)
+        if match:
+            inner_html = match.group(1).strip()
+        if not inner_html:
+            inner_html = text_raw
+        if _looks_like_html(inner_html):
+            text = html_to_markdown(inner_html)
+            logger.info("converted HTML to markdown for %s", tag)
         unit_ref = attrs.get("unitRef")
         decimals = attrs.get("decimals")
         context_ref = attrs.get("contextRef")

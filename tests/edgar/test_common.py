@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from profit.sources.edgar.common import is_main_submission_text, should_skip_accession_file
 
 

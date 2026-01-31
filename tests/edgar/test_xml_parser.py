@@ -11,6 +11,13 @@ SIMPLE_XBRL = b"""
 </xbrli:xbrl>
 """
 
+HTML_XBRL = b"""
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance">
+  <us-gaap:Revenue xmlns:us-gaap="http://fasb.org/us-gaap/2020-01-31" contextRef="c2" unitRef="USD" decimals="-6">5000</us-gaap:Revenue>
+  <notes>See <b>details</b> in <i>Appendix</i>.</notes>
+</xbrli:xbrl>
+"""
+
 
 def test_parse_xbrl_extracts_numeric_facts():
     parsed = parse_xbrl(SIMPLE_XBRL)
@@ -26,3 +33,10 @@ def test_parse_xbrl_extracts_numeric_facts():
 
     assert len(parsed.unparsed) == 1
     assert parsed.unparsed[0]["tag"] == "nonNumeric"
+
+
+def test_parse_xbrl_converts_html_unparsed():
+    parsed = parse_xbrl(HTML_XBRL)
+    assert len(parsed.facts) == 1
+    assert len(parsed.unparsed) == 1
+    assert "See **details** in *Appendix*." in parsed.unparsed[0]["text"]
