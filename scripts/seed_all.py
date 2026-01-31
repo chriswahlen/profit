@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 from pathlib import Path
 from datetime import timedelta
 
 from profit.cache import FileCache
-from profit.cache.columnar_store import ColumnarSqliteStore
-from profit.catalog import EntityStore
 from profit.catalog.seeders import (
     OpenExchangeRatesCurrencySeeder,
     SecCompanyTickerSeeder,
@@ -17,8 +14,8 @@ from profit.catalog.seeders import (
     StooqUsHistorySeeder,
     StooqWorldHistorySeeder,
 )
-from profit.catalog.store import CatalogStore
 from profit.config import ProfitConfig
+from profit.stores import StoreContainer
 
 
 def seed_sec(store: EntityStore, catalog: CatalogStore, cache: FileCache, offline: bool, ttl_days: int, force: bool) -> None:
@@ -123,15 +120,8 @@ def main() -> None:
     cache_root = args.cache_root or ProfitConfig.resolve_cache_root()
 
     profit_db = data_root / "profit.sqlite"
-    shared_conn = sqlite3.connect(profit_db)
-    shared_conn.execute("PRAGMA busy_timeout=5000")
-    shared_conn.execute("PRAGMA journal_mode=WAL")
-    shared_conn.execute("PRAGMA synchronous=NORMAL")
-
-    store = EntityStore(profit_db, conn=shared_conn)
+    stores = StoreContainer.open(profit_db)
     cache = FileCache(base_dir=cache_root / "seed_cache")
-    catalog = CatalogStore(profit_db, conn=shared_conn)
-    sql_store = ColumnarSqliteStore(conn=shared_conn)
 
     force_targets = {item.strip().lower() for entry in args.force_only for item in entry.split(",") if item.strip()}
     force_all = args.force
@@ -139,14 +129,14 @@ def main() -> None:
     def _force(name: str) -> bool:
         return force_all or name in force_targets
 
-    seed_oxr(store, cache, args.offline, args.ttl_days, force=_force("oxr"))
-    register_stooq_provider(store)
-    seed_stooq_us(catalog, data_root, force=_force("stooq_us"), ttl_days=args.ttl_days)
-    seed_stooq_us_history(sql_store, data_root, force=_force("stooq_us_history"), ttl_days=args.ttl_days)
-    seed_stooq_world_history(sql_store, data_root, force=_force("stooq_world_history"), ttl_days=args.ttl_days)
-    seed_stooq(catalog, data_root, force=_force("stooq"), ttl_days=args.ttl_days)
-    seed_sec(store, catalog, cache, args.offline, args.ttl_days, force=_force("sec"))
-    shared_conn.close()
+    seed_oxr(stores.entity, cache, args.offline, args.ttl_days, force=_force("oxr"))
+    register_stooq_provider(stores.entity)
+    seed_stooq_us(stores.catalog, data_root, force=_force("stooq_us"), ttl_days=args.ttl_days)
+    seed_stooq_us_history(stores.columnar, data_root, force=_force("stooq_us_history"), ttl_days=args.ttl_days)
+    seed_stooq_world_history(stores.columnar, data_root, force=_force("stooq_world_history"), ttl_days=args.ttl_days)
+    seed_stooq(stores.catalog, data_root, force=_force("stooq"), ttl_days=args.ttl_days)
+    seed_sec(stores.entity, stores.catalog, cache, args.offline, args.ttl_days, force=_force("sec"))
+    stores.close()
 
 
 if __name__ == "__main__":
