@@ -342,12 +342,12 @@ class ColumnarSqliteStore:
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
         pts = list(points)
-        logger.info(
-            "columnar.write series_id=%s points=%s first_ts=%s",
-            series_id,
-            len(pts),
-            pts[0][0].isoformat() if pts else None,
-        )
+        #logger.info(
+        #    "columnar.write series_id=%s points=%s first_ts=%s",
+        #    series_id,
+        #    len(pts),
+        #    pts[0][0].isoformat() if pts else None,
+        #)
         cfg = self.get_series(series_id)
         grouped: dict[int, list[tuple[int, float]]] = {}
         grouped_offsets: dict[int, list[tuple[int, int]]] = {}
