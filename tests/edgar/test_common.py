@@ -23,3 +23,7 @@ def test_should_skip_accession_file_for_js():
 
 def test_should_not_skip_other_files():
     assert not should_skip_accession_file("0000320193-26-000006", "a10-k2024.htm")
+
+
+def test_should_skip_metalinks():
+    assert should_skip_accession_file("0000320193-26-000006", "metalinks.json")

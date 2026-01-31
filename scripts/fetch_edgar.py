@@ -9,6 +9,7 @@ from typing import Optional
 from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.edgar import EdgarDatabase
+from profit.edgar.zip_utils import expand_zip_archive
 from profit.sources.edgar import (
     EdgarSubmissionsFetcher,
     EdgarSubmissionsRequest,
@@ -146,8 +147,26 @@ def main() -> None:
                     file_names.append(name)
                     print(f"- {name}")
                 edgar_db.record_accession_index(result.cik, args.accession, acc.base_url, file_names)
+
+                existing_names = set(file_names)
                 for name in file_names:
                     if edgar_db.has_file(args.accession, name):
+                        continue
+                    if name.lower().endswith(".zip"):
+                        try:
+                            payload = reader.fetch_file(args.cik, args.accession, name)
+                        except PermanentFetchError as file_exc:
+                            logging.warning("skipping zip file due to fetch error %s %s", name, file_exc)
+                            continue
+                        expanded = expand_zip_archive(args.accession, payload)
+                        for entry_name, entry_payload in expanded.items():
+                            already_seen = entry_name in existing_names or edgar_db.has_file(args.accession, entry_name)
+                            if already_seen:
+                                logging.info("dedup skipping %s (source=%s)", entry_name, name)
+                                continue
+                            edgar_db.store_file(args.accession, entry_name, entry_payload)
+                            existing_names.add(entry_name)
+                        edgar_db.store_file(args.accession, name, b"")
                         continue
                     try:
                         payload = reader.fetch_file(args.cik, args.accession, name)

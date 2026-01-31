@@ -26,6 +26,28 @@ def strip_leading_zeros(val: str) -> str:
     return stripped or "0"
 
 
+IGNORED_EXTENSIONS = {
+    ".css",
+    ".js",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".map",
+    ".woff",
+    ".ttf",
+    ".eot",
+    ".mp4",
+    ".jsonld",
+    ".webmanifest",
+    ".rdf",
+}
+
+IGNORED_FILES = {"metalink.json", "metalinks.json"}
+
+
 def is_main_submission_text(accession: str, file_name: str) -> bool:
     if not file_name:
         return False
@@ -38,4 +60,6 @@ def should_skip_accession_file(accession: str, file_name: str) -> bool:
     if is_main_submission_text(accession, file_name):
         return True
     lower = file_name.lower()
-    return lower.endswith(".css") or lower.endswith(".js")
+    if lower in IGNORED_FILES:
+        return True
+    return any(lower.endswith(ext) for ext in IGNORED_EXTENSIONS)
