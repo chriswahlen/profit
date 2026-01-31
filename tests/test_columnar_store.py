@@ -9,6 +9,10 @@ import profit.cache.columnar_store as colmod
 from profit.cache import ColumnarSqliteStore, SliceCorruptionError, SeriesNotFoundError
 
 
+# Tests assume writes flush immediately, so keep pending_limit=1 in this suite.
+ColumnarSqliteStore.DEFAULT_PENDING_LIMIT = 1
+
+
 DAY_US = 86_400_000_000
 
 
@@ -259,6 +263,7 @@ def test_checksum_toggle(tmp_path):
         checksum_enabled=True,
     )
     strict.write(sid, [(_dt(1970, 1, 1), 1.0)])  # protected by checksum
+    strict.flush()
     con = sqlite3.connect(db_path)
     con.execute(
         "UPDATE __col_slice__ SET values_blob = x'00' WHERE series_id=? AND start_index=0",
@@ -310,6 +315,7 @@ def test_reopen_and_read(tmp_path):
         window_points=2,
     )
     store.write(sid, [(_dt(1970, 1, 1), 42.0)])
+    store.flush()
 
     # Reopen to ensure WAL + connection caching don't hide on-disk state.
     reopened = ColumnarSqliteStore(db_path)
@@ -328,6 +334,7 @@ def test_window_size_edges(tmp_path):
         window_points=1,
     )
     store.write(sid, [(_dt(1970, 1, 1), 7.0)])
+    store.flush()
     vals = store.read_slice_values(sid, 0)
     assert vals == [7.0]
 
@@ -340,6 +347,7 @@ def test_window_size_edges(tmp_path):
         window_points=8,
     )
     store.write(sid_big, [(_dt(1970, 1, 8), 8.0)])
+    store.flush()
     vals_big = store.read_slice_values(sid_big, 0)
     assert vals_big[7] == 8.0
 
@@ -355,8 +363,8 @@ def test_empty_write_noop(tmp_path):
         window_points=2,
     )
     store.write(sid, [])
-    with pytest.raises(KeyError):
-        store.read_slice_values(sid, 0)
+    vals = store.read_slice_values(sid, 0)
+    assert math.isnan(vals[0])
 
 
 def test_read_empty_range_returns_empty(tmp_path):
@@ -1131,6 +1139,99 @@ def test_non_daily_step_empty_series(tmp_path):
     assert gaps[0][1] == end
     store.mark_range_fetched(sid, start=start, end=end)
     assert store.is_range_complete(sid, start=start, end=end) is True
+
+
+def test_batched_reads_see_pending(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3", pending_limit=16)
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+    )
+    pts = [(_dt(1970, 1, 1 + day), float(day)) for day in range(5)]
+    store.write(sid, pts)
+    vals = store.read_slice_values(sid, 0)
+    assert vals[0] == 0.0
+    assert vals[1] == 1.0
+
+    # Verify that the points are pending by reading it from
+    # a second connection.
+    store2 = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    vals2 = store2.read_slice_values(sid, 0)
+    assert math.isnan(vals2[0])
+    assert math.isnan(vals2[1])
+
+
+def test_batched_overwrite(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="GOOG",
+        dataset="bar",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+    )
+    store.write(sid, [(_dt(1970, 1, 1 + day), float(day)) for day in range(4)])
+    store.write(sid, [(_dt(1970, 1, 1 + day), float(day + 10)) for day in range(4)])
+    vals = store.read_slice_values(sid, 0)
+    assert vals[0] == 10.0
+    assert vals[3] == 13.0
+
+
+def test_close_flushes_pending(tmp_path):
+    path = tmp_path / "col.sqlite3"
+    store = ColumnarSqliteStore(path)
+    sid = store.create_series(
+        instrument_id="IBM",
+        dataset="bar",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+    )
+    store.write(sid, [(_dt(1970, 1, 1 + day), float(day)) for day in range(2)])
+    store.close()
+
+    reopened = ColumnarSqliteStore(path)
+    vals = reopened.read_slice_values(sid, 0)
+    assert vals[0] == 0.0
+    assert vals[1] == 1.0
+
+
+def test_other_connection_sees_old_unflushed(tmp_path):
+    path = tmp_path / "col.sqlite3"
+    writer = ColumnarSqliteStore(path, pending_limit=16)
+    sid = writer.create_series(
+        instrument_id="TSLA",
+        dataset="bar",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+    )
+
+    initial = [(_dt(1970, 1, day + 1), float(day)) for day in range(4)]
+    writer.write(sid, initial)
+    writer.flush()
+
+    updated = [(_dt(1970, 1, day + 1), float(day + 10)) for day in range(4)]
+    writer.write(sid, updated)
+
+    reader = ColumnarSqliteStore(path)
+    vals_before = reader.read_slice_values(sid, 0)
+    assert vals_before[0] == 0.0
+    assert vals_before[1] == 1.0
+
+    writer.flush()
+    reader.close()
+    reopened = ColumnarSqliteStore(path)
+    vals_after = reopened.read_slice_values(sid, 0)
+    assert vals_after[0] == 10.0
+    assert vals_after[1] == 11.0
 
 
 def test_sparse_mark_leaves_holes(tmp_path):

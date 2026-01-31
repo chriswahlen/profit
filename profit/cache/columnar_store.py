@@ -96,7 +96,62 @@ class ColumnarSqliteStore:
       (INSERT OR REPLACE).
     """
 
-    def __init__(self, db_path: Optional[Path] = None) -> None:
+    _SLICE_INSERT_SQL = """
+        INSERT OR REPLACE INTO __col_slice__ (series_id, start_index, values_blob, offsets_blob, checksum_blob, completeness)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """
+
+    _CREATE_SERIES_SQL = """
+        INSERT INTO __col_series__ (
+            instrument_id,
+            dataset,
+            field,
+            step_us,
+            grid_origin_ts_us,
+            window_points,
+            compression,
+            offsets_enabled,
+            checksum_enabled,
+            sentinel_f64_bits,
+            sentinel_unfetched_f64_bits
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+    _SELECT_SERIES_SQL = """
+        SELECT
+            series_id,
+            instrument_id,
+            dataset,
+            field,
+            step_us,
+            grid_origin_ts_us,
+            window_points,
+            compression,
+            offsets_enabled,
+            checksum_enabled,
+            sentinel_f64_bits,
+            sentinel_unfetched_f64_bits
+        FROM __col_series__
+        WHERE series_id = ?
+        """
+
+    _DELETE_SLICES_SQL = "DELETE FROM __col_slice__ WHERE series_id = ?"
+    _DELETE_SERIES_SQL = "DELETE FROM __col_series__ WHERE series_id = ?"
+    _SELECT_SLICE_SQL = """
+        SELECT values_blob, offsets_blob, checksum_blob
+        FROM __col_slice__
+        WHERE series_id = ? AND start_index = ?
+        """
+    _SELECT_SERIES_ID_SQL = """
+        SELECT series_id
+        FROM __col_series__
+        WHERE instrument_id = ? AND dataset = ? AND field = ? AND step_us = ?
+        """
+
+    DEFAULT_PENDING_LIMIT = 32
+
+    def __init__(self, db_path: Optional[Path] = None, *, pending_limit: int | None = None) -> None:
         self.db_path = Path(db_path) if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Explicitly size the statement cache (default 128) to favor reuse of our
@@ -105,7 +160,17 @@ class ColumnarSqliteStore:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._cursor_cache: dict[str, sqlite3.Cursor] = {}
+        self._pending_slices: list[tuple[int, int, bytes, bytes, bytes, int]] = []
+        self._pending_limit = pending_limit if pending_limit is not None else self.DEFAULT_PENDING_LIMIT
         self._init_schema()
+
+    def _cursor(self, key: str) -> sqlite3.Cursor:
+        cur = self._cursor_cache.get(key)
+        if cur is None:
+            cur = self._conn.cursor()
+            self._cursor_cache[key] = cur
+        return cur
 
     # Series -----------------------------------------------------------
     def create_series(
@@ -147,24 +212,9 @@ class ColumnarSqliteStore:
             offsets_enabled,
             checksum_enabled,
         )
-        cur = self._conn.cursor()
+        cur = self._cursor("create_series")
         cur.execute(
-            """
-            INSERT INTO __col_series__ (
-                instrument_id,
-                dataset,
-                field,
-                step_us,
-                grid_origin_ts_us,
-                window_points,
-                compression,
-                offsets_enabled,
-                checksum_enabled,
-                sentinel_f64_bits,
-                sentinel_unfetched_f64_bits
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            self._CREATE_SERIES_SQL,
             (
                 instrument_id,
                 dataset,
@@ -183,27 +233,8 @@ class ColumnarSqliteStore:
         return int(cur.lastrowid)
 
     def get_series(self, series_id: int) -> SeriesConfig:
-        cur = self._conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                series_id,
-                instrument_id,
-                dataset,
-                field,
-                step_us,
-                grid_origin_ts_us,
-                window_points,
-                compression,
-                offsets_enabled,
-                checksum_enabled,
-                sentinel_f64_bits,
-                sentinel_unfetched_f64_bits
-            FROM __col_series__
-            WHERE series_id = ?
-            """,
-            (int(series_id),),
-        )
+        cur = self._cursor("select_series")
+        cur.execute(self._SELECT_SERIES_SQL, (int(series_id),))
         row = cur.fetchone()
         if row is None:
             raise SeriesNotFoundError(series_id)
@@ -236,9 +267,10 @@ class ColumnarSqliteStore:
 
         Idempotent: dropping a missing series is a no-op.
         """
-        cur = self._conn.cursor()
-        cur.execute("DELETE FROM __col_slice__ WHERE series_id = ?", (int(series_id),))
-        cur.execute("DELETE FROM __col_series__ WHERE series_id = ?", (int(series_id),))
+        cur = self._cursor("delete_slices")
+        cur.execute(self._DELETE_SLICES_SQL, (int(series_id),))
+        cur = self._cursor("delete_series")
+        cur.execute(self._DELETE_SERIES_SQL, (int(series_id),))
         self._conn.commit()
 
     def get_series_id(
@@ -254,13 +286,9 @@ class ColumnarSqliteStore:
 
         Returns None when missing.
         """
-        cur = self._conn.cursor()
+        cur = self._cursor("select_series_id")
         cur.execute(
-            """
-            SELECT series_id
-            FROM __col_series__
-            WHERE instrument_id = ? AND dataset = ? AND field = ? AND step_us = ?
-            """,
+            self._SELECT_SERIES_ID_SQL,
             (instrument_id, dataset, field, int(step_us)),
         )
         row = cur.fetchone()
@@ -325,7 +353,7 @@ class ColumnarSqliteStore:
 
         Mode is one of PASSIVE|FULL|RESTART|TRUNCATE (case-insensitive).
         """
-        cur = self._conn.cursor()
+        cur = self._cursor("wal_checkpoint")
         cur.execute(f"PRAGMA wal_checkpoint({mode})")
         row = cur.fetchone()
         return (int(row[0]), int(row[1]), int(row[2]))  # type: ignore[index]
@@ -340,19 +368,32 @@ class ColumnarSqliteStore:
         self._conn.execute("VACUUM")
         self._conn.commit()
 
+    def flush(self) -> None:
+        """
+        Public flush for pending slice writes. Mostly useful for callers that
+        batch large writes and want an explicit barrier.
+        """
+        self._flush_pending_slices()
+
     def close(self) -> None:
         """Close the underlying SQLite connection."""
+        self._flush_pending_slices()
+        for cur in self._cursor_cache.values():
+            try:
+                cur.close()
+            except Exception:
+                pass
         self._conn.close()
 
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:
         pts = list(points)
-        #logger.info(
-        #    "columnar.write series_id=%s points=%s first_ts=%s",
-        #    series_id,
-        #    len(pts),
-        #    pts[0][0].isoformat() if pts else None,
-        #)
+        logger.debug(
+            "columnar.write series_id=%s points=%s first_ts=%s",
+            series_id,
+            len(pts),
+            pts[0][0].isoformat() if pts else None,
+        )
         cfg = self.get_series(series_id)
         grouped: dict[int, list[tuple[int, float]]] = {}
         grouped_offsets: dict[int, list[tuple[int, int]]] = {}
@@ -394,12 +435,12 @@ class ColumnarSqliteStore:
                 for pos, offset_us in off_updates:
                     offsets[pos] = offset_us
 
-            self._store_slice(cfg, slice_start, values, offsets)
+            self._enqueue_slice(cfg, slice_start, values, offsets)
 
     # Reads (minimal; primarily for tests and debugging) ----------------
     def read_slice_values(self, series_id: int, slice_start_index: int) -> list[float]:
         cfg = self.get_series(series_id)
-        values, _offsets = self._load_or_init_slice(cfg, slice_start_index, require_existing=True)
+        values, _offsets = self._get_slice(cfg, slice_start_index, require_existing=False)
         logger.info(
             "columnar.read_slice series_id=%s slice_start_index=%s len=%s",
             series_id,
@@ -432,7 +473,7 @@ class ColumnarSqliteStore:
         out: list[tuple[datetime, float]] = []
         slice_start = int(start_slice)
         while slice_start <= int(end_slice):
-            values, offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            values, offsets = self._get_slice(cfg, slice_start, require_existing=False)
             for i in range(cfg.window_points):
                 idx = slice_start + i
                 if idx < int(start_idx) or idx > int(end_idx):
@@ -485,7 +526,7 @@ class ColumnarSqliteStore:
 
         slice_start = int(start_slice)
         while slice_start <= int(end_slice):
-            values, offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            values, offsets = self._get_slice(cfg, slice_start, require_existing=False)
             changed = False
             for pos in range(cfg.window_points):
                 idx = slice_start + pos
@@ -495,7 +536,7 @@ class ColumnarSqliteStore:
                     values[pos] = miss
                     changed = True
             if changed:
-                self._store_slice(cfg, slice_start, values, offsets)
+                self._enqueue_slice(cfg, slice_start, values, offsets)
             slice_start += cfg.window_points
 
     def get_unfetched_ranges(
@@ -527,7 +568,7 @@ class ColumnarSqliteStore:
 
         slice_start = int(start_slice)
         while slice_start <= int(end_slice):
-            values, _offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            values, _offsets = self._get_slice(cfg, slice_start, require_existing=False)
             for pos in range(cfg.window_points):
                 idx = slice_start + pos
                 if idx < int(start_idx) or idx > int(end_idx):
@@ -571,7 +612,7 @@ class ColumnarSqliteStore:
 
         slice_start = int(start_slice)
         while slice_start <= int(end_slice):
-            values, _offsets = self._load_or_init_slice(cfg, slice_start, require_existing=False)
+            values, _offsets = self._get_slice(cfg, slice_start, require_existing=False)
             for pos in range(cfg.window_points):
                 idx = slice_start + pos
                 if idx < int(start_idx) or idx > int(end_idx):
@@ -583,7 +624,7 @@ class ColumnarSqliteStore:
 
     # Internals --------------------------------------------------------
     def _init_schema(self) -> None:
-        cur = self._conn.cursor()
+        cur = self._cursor("schema_init")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS __col_series__ (
@@ -638,13 +679,9 @@ class ColumnarSqliteStore:
         if slice_start_index % cfg.window_points != 0:
             raise ValueError("slice_start_index must be aligned to window_points")
 
-        cur = self._conn.cursor()
+        cur = self._cursor("select_slice")
         cur.execute(
-            """
-            SELECT values_blob, offsets_blob, checksum_blob
-            FROM __col_slice__
-            WHERE series_id = ? AND start_index = ?
-            """,
+            self._SELECT_SLICE_SQL,
             (int(cfg.series_id), int(slice_start_index)),
         )
         row = cur.fetchone()
@@ -658,22 +695,29 @@ class ColumnarSqliteStore:
         values_blob = bytes(row[0])
         offsets_blob = bytes(row[1])
         checksum_blob = bytes(row[2])
+        return self._decode_slice_blobs(cfg, slice_start_index, values_blob, offsets_blob, checksum_blob)
 
+    def _decode_slice_blobs(
+        self,
+        cfg: SeriesConfig,
+        slice_start_index: int,
+        values_blob: bytes,
+        offsets_blob: bytes,
+        checksum_blob: bytes,
+    ) -> tuple[array, array]:
         values_bytes = _decompress_if_needed(values_blob, cfg.compression)
         offsets_bytes = _decompress_if_needed(offsets_blob, cfg.compression) if cfg.offsets_enabled else b""
-
         if cfg.checksum_enabled:
             expected = _slice_checksum(values_bytes, offsets_bytes)
             if checksum_blob != expected:
                 raise SliceCorruptionError(
                     f"Checksum mismatch for series_id={cfg.series_id} start_index={slice_start_index}"
                 )
-
         values = _decode_f64(values_bytes, cfg.window_points)
         offsets = _decode_i32(offsets_bytes, cfg.window_points) if cfg.offsets_enabled else _init_offsets(cfg.window_points)
         return values, offsets
 
-    def _store_slice(self, cfg: SeriesConfig, slice_start_index: int, values: array, offsets: array) -> None:
+    def _enqueue_slice(self, cfg: SeriesConfig, slice_start_index: int, values: array, offsets: array) -> None:
         if slice_start_index % cfg.window_points != 0:
             raise ValueError("slice_start_index must be aligned to window_points")
         if len(values) != cfg.window_points:
@@ -689,12 +733,7 @@ class ColumnarSqliteStore:
         offsets_blob = _compress_if_needed(offsets_bytes, cfg.compression) if cfg.offsets_enabled else b""
         completeness = 0 if any(_is_unfetched(v, cfg) for v in values) else 1
 
-        cur = self._conn.cursor()
-        cur.execute(
-            """
-            INSERT OR REPLACE INTO __col_slice__ (series_id, start_index, values_blob, offsets_blob, checksum_blob, completeness)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
+        self._pending_slices.append(
             (
                 int(cfg.series_id),
                 int(slice_start_index),
@@ -702,9 +741,44 @@ class ColumnarSqliteStore:
                 sqlite3.Binary(offsets_blob),
                 sqlite3.Binary(checksum),
                 int(completeness),
-            ),
+            )
         )
-        self._conn.commit()
+        if len(self._pending_slices) >= self._pending_limit:
+            self._flush_pending_slices()
+
+    def _flush_pending_slices(self) -> None:
+        if not self._pending_slices:
+            return
+        cur = self._cursor("insert_slice")
+        in_tx = self._conn.in_transaction
+        if not in_tx:
+            cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.executemany(
+                self._SLICE_INSERT_SQL,
+                self._pending_slices,
+            )
+            if not in_tx:
+                self._conn.commit()
+        except Exception:
+            if not in_tx:
+                self._conn.rollback()
+            raise
+        finally:
+            self._pending_slices.clear()
+
+    def _pending_slice(self, cfg: SeriesConfig, slice_start_index: int) -> tuple[array, array] | None:
+        for entry in reversed(self._pending_slices):
+            sid, start, values_blob, offsets_blob, checksum_blob, _ = entry
+            if sid == cfg.series_id and start == slice_start_index:
+                return self._decode_slice_blobs(cfg, slice_start_index, values_blob, offsets_blob, checksum_blob)
+        return None
+
+    def _get_slice(self, cfg: SeriesConfig, slice_start_index: int, *, require_existing: bool) -> tuple[array, array]:
+        pending = self._pending_slice(cfg, slice_start_index)
+        if pending is not None:
+            return pending
+        return self._load_or_init_slice(cfg, slice_start_index, require_existing=require_existing)
 
 
 def _is_bitmatch(value: float, bits: int) -> bool:
