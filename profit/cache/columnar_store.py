@@ -151,7 +151,13 @@ class ColumnarSqliteStore:
 
     DEFAULT_PENDING_LIMIT = 32
 
-    def __init__(self, db_path: Optional[Path] = None, *, pending_limit: int | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        *,
+        pending_limit: int | None = None,
+        dedupe_pending: bool = False,
+    ) -> None:
         self.db_path = Path(db_path) if db_path else _default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Explicitly size the statement cache (default 128) to favor reuse of our
@@ -163,6 +169,7 @@ class ColumnarSqliteStore:
         self._cursor_cache: dict[str, sqlite3.Cursor] = {}
         self._pending_slices: list[tuple[int, int, bytes, bytes, bytes, int]] = []
         self._pending_limit = pending_limit if pending_limit is not None else self.DEFAULT_PENDING_LIMIT
+        self._dedupe_pending = dedupe_pending
         self._init_schema()
 
     def _cursor(self, key: str) -> sqlite3.Cursor:
@@ -733,16 +740,20 @@ class ColumnarSqliteStore:
         offsets_blob = _compress_if_needed(offsets_bytes, cfg.compression) if cfg.offsets_enabled else b""
         completeness = 0 if any(_is_unfetched(v, cfg) for v in values) else 1
 
-        self._pending_slices.append(
-            (
-                int(cfg.series_id),
-                int(slice_start_index),
-                sqlite3.Binary(values_blob),
-                sqlite3.Binary(offsets_blob),
-                sqlite3.Binary(checksum),
-                int(completeness),
-            )
+        entry = (
+            int(cfg.series_id),
+            int(slice_start_index),
+            sqlite3.Binary(values_blob),
+            sqlite3.Binary(offsets_blob),
+            sqlite3.Binary(checksum),
+            int(completeness),
         )
+        if self._dedupe_pending:
+            for idx in range(len(self._pending_slices) - 1, -1, -1):
+                if self._pending_slices[idx][0] == entry[0] and self._pending_slices[idx][1] == entry[1]:
+                    del self._pending_slices[idx]
+                    break
+        self._pending_slices.append(entry)
         if len(self._pending_slices) >= self._pending_limit:
             self._flush_pending_slices()
 

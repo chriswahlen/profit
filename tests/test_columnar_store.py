@@ -1202,6 +1202,28 @@ def test_close_flushes_pending(tmp_path):
     assert vals[1] == 1.0
 
 
+def test_pending_dedup_option(tmp_path):
+    store = ColumnarSqliteStore(
+        tmp_path / "col.sqlite3",
+        pending_limit=16,
+        dedupe_pending=True,
+    )
+    sid = store.create_series(
+        instrument_id="DUP",
+        dataset="bar",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=4,
+    )
+    pts = [(_dt(1970, 1, 1 + day), float(day)) for day in range(4)]
+    store.write(sid, pts)
+    store.write(sid, [(_dt(1970, 1, 1 + day), float(day + 5)) for day in range(4)])
+    assert len(store._pending_slices) == 1
+    vals = store.read_slice_values(sid, 0)
+    assert vals[0] == 5.0
+
+
 def test_other_connection_sees_old_unflushed(tmp_path):
     path = tmp_path / "col.sqlite3"
     writer = ColumnarSqliteStore(path, pending_limit=16)
