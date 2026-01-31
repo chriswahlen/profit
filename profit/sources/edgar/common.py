@@ -46,7 +46,7 @@ IGNORED_EXTENSIONS = {
     ".xsd",
 }
 
-IGNORED_FILES = {"metalink.json", "metalinks.json"}
+IGNORED_FILES = {"metalink.json", "metalinks.json", "filingsummary.xml"}
 
 
 def is_main_submission_text(accession: str, file_name: str) -> bool:

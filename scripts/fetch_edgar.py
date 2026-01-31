@@ -10,6 +10,7 @@ from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.edgar import EdgarDatabase
 from profit.edgar.zip_utils import expand_zip_archive
+from profit.edgar.xml_parser import parse_xbrl
 from profit.sources.edgar import (
     EdgarSubmissionsFetcher,
     EdgarSubmissionsRequest,
@@ -88,6 +89,11 @@ def main() -> None:
     parser.add_argument("--ttl-minutes", type=int, default=1440, help="Cache TTL minutes (default 1440 = 1 day)")
     parser.add_argument("--offline", action="store_true", help="Use cache only; skip network")
     parser.add_argument("--log-level", default="INFO", help="Logging level (default INFO)")
+    parser.add_argument(
+        "--parse-xml",
+        action="store_true",
+        help="Parse fetched XML/XBRL files and emit metrics summary",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
@@ -166,6 +172,17 @@ def main() -> None:
                                 continue
                             edgar_db.store_file(args.accession, entry_name, entry_payload)
                             existing_names.add(entry_name)
+                        if args.parse_xml and entry_name.lower().endswith(".xml"):
+                            try:
+                                parsed = parse_xbrl(entry_payload)
+                                logging.info("parsed xml file=%s facts=%d unparsed=%d", entry_name, len(parsed.facts), len(parsed.unparsed))
+                                print(f"[XML] {entry_name} facts={len(parsed.facts)} unparsed={len(parsed.unparsed)}")
+                                for fact in parsed.facts[:5]:
+                                    print(f"[XML] {entry_name} {fact.name} context={fact.context_ref} unit={fact.unit_ref} value={fact.value}")
+                                if parsed.unparsed:
+                                    print(f"[XML] {entry_name} unparsed_count={len(parsed.unparsed)}")
+                            except Exception as exc:
+                                logging.warning("xml parse failed file=%s err=%s", entry_name, exc)
                         edgar_db.store_file(args.accession, name, b"")
                         continue
                     try:
@@ -174,6 +191,17 @@ def main() -> None:
                         logging.warning("skipping file due to fetch error %s %s", name, file_exc)
                         continue
                     edgar_db.store_file(args.accession, name, payload)
+                    if args.parse_xml and name.lower().endswith(".xml"):
+                        try:
+                            parsed = parse_xbrl(payload)
+                            logging.info("parsed xml file=%s facts=%d unparsed=%d", name, len(parsed.facts), len(parsed.unparsed))
+                            print(f"[XML] {name} facts={len(parsed.facts)} unparsed={len(parsed.unparsed)}")
+                            for fact in parsed.facts[:5]:
+                                print(f"[XML] {name} {fact.name} context={fact.context_ref} unit={fact.unit_ref} value={fact.value}")
+                            if parsed.unparsed:
+                                print(f"[XML] {name} unparsed_count={len(parsed.unparsed)}")
+                        except Exception as exc:
+                            logging.warning("xml parse failed file=%s err=%s", name, exc)
     finally:
         edgar_db.close()
 

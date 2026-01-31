@@ -31,3 +31,7 @@ def test_should_skip_metalinks():
 
 def test_should_skip_xsd():
     assert should_skip_accession_file("0000320193-26-000006", "schema.xsd")
+
+
+def test_should_skip_filing_summary():
+    assert should_skip_accession_file("0000320193-26-000006", "FilingSummary.xml")
