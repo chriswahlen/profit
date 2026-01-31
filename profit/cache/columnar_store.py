@@ -9,7 +9,7 @@ import struct
 import sys
 import zlib
 from array import array
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -78,6 +78,7 @@ class SeriesConfig:
     sentinel_f64_bits: int
     sentinel_unfetched_f64: float
     sentinel_unfetched_f64_bits: int
+    high_water_ts_us: int | None
 
 
 class ColumnarSqliteStore:
@@ -113,9 +114,10 @@ class ColumnarSqliteStore:
             offsets_enabled,
             checksum_enabled,
             sentinel_f64_bits,
-            sentinel_unfetched_f64_bits
+            sentinel_unfetched_f64_bits,
+            high_water_ts_us
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
     _SELECT_SERIES_SQL = """
@@ -131,7 +133,8 @@ class ColumnarSqliteStore:
             offsets_enabled,
             checksum_enabled,
             sentinel_f64_bits,
-            sentinel_unfetched_f64_bits
+            sentinel_unfetched_f64_bits,
+            high_water_ts_us
         FROM __col_series__
         WHERE series_id = ?
         """
@@ -161,7 +164,8 @@ class ColumnarSqliteStore:
             offsets_enabled,
             checksum_enabled,
             sentinel_f64_bits,
-            sentinel_unfetched_f64_bits
+            sentinel_unfetched_f64_bits,
+            high_water_ts_us
         FROM __col_series__
         """
     _SELECT_ALL_SERIES_SQL = """
@@ -228,6 +232,7 @@ class ColumnarSqliteStore:
         checksum_enabled: bool = True,
         sentinel_f64: float = float("nan"),
         sentinel_unfetched_f64: float | None = None,
+        high_water_ts_us: int | None = None,
     ) -> int:
         if step_us <= 0:
             raise ValueError("step_us must be > 0")
@@ -268,6 +273,7 @@ class ColumnarSqliteStore:
                 1 if checksum_enabled else 0,
                 int(sentinel_bits),
                 int(sentinel_unfetched_bits),
+                None if high_water_ts_us is None else int(high_water_ts_us),
             ),
         )
         self._conn.commit()
@@ -287,6 +293,7 @@ class ColumnarSqliteStore:
             sentinel_f64_bits=int(sentinel_bits),
             sentinel_unfetched_f64=float(sentinel_unfetched_f64),
             sentinel_unfetched_f64_bits=int(sentinel_unfetched_bits),
+            high_water_ts_us=None if high_water_ts_us is None else int(high_water_ts_us),
         )
         self._series_cache[series_id] = cfg
         return series_id
@@ -308,6 +315,9 @@ class ColumnarSqliteStore:
         sentinel_unfetched_bits = int(row[11]) if len(row) > 11 else 0
         if sentinel_unfetched_bits == 0 or sentinel_unfetched_bits == sentinel_bits:
             sentinel_unfetched_bits = _default_unfetched_bits(sentinel_bits)
+        high_water_ts_us = None
+        if len(row) > 12 and row[12] is not None:
+            high_water_ts_us = int(row[12])
         sentinel_f64 = _u64_to_f64(sentinel_bits)
         sentinel_unfetched_f64 = _u64_to_f64(sentinel_unfetched_bits)
         return SeriesConfig(
@@ -325,6 +335,7 @@ class ColumnarSqliteStore:
             sentinel_f64_bits=sentinel_bits,
             sentinel_unfetched_f64=float(sentinel_unfetched_f64),
             sentinel_unfetched_f64_bits=sentinel_unfetched_bits,
+            high_water_ts_us=high_water_ts_us,
         )
 
     def drop_series(self, series_id: int) -> None:
@@ -362,6 +373,27 @@ class ColumnarSqliteStore:
         if row is None:
             return None
         return int(row[0])
+
+    def get_high_water_ts_us(self, series_id: int) -> int | None:
+        cfg = self.get_series(series_id)
+        return cfg.high_water_ts_us
+
+    def set_high_water_ts_us(self, series_id: int, ts_us: int | None) -> None:
+        cfg = self.get_series(series_id)
+        if ts_us is not None:
+            ts_us = int(ts_us)
+        if cfg.high_water_ts_us == ts_us:
+            return
+        cur = self._cursor("update_high_water")
+        cur.execute("UPDATE __col_series__ SET high_water_ts_us = ? WHERE series_id = ?", (ts_us, int(series_id)))
+        self._conn.commit()
+        self._series_cache[series_id] = replace(cfg, high_water_ts_us=ts_us)
+
+    def bump_high_water_ts_us(self, series_id: int, ts_us: int) -> None:
+        cfg = self.get_series(series_id)
+        if cfg.high_water_ts_us is not None and ts_us <= cfg.high_water_ts_us:
+            return
+        self.set_high_water_ts_us(series_id, ts_us)
 
     def get_or_create_series(
         self,
@@ -707,6 +739,7 @@ class ColumnarSqliteStore:
                 checksum_enabled INTEGER NOT NULL,
                 sentinel_f64_bits INTEGER NOT NULL,
                 sentinel_unfetched_f64_bits INTEGER NOT NULL,
+                high_water_ts_us INTEGER,
                 UNIQUE (instrument_id, dataset, field, step_us)
             )
             """
@@ -716,6 +749,8 @@ class ColumnarSqliteStore:
         if "sentinel_unfetched_f64_bits" not in series_cols:
             cur.execute("ALTER TABLE __col_series__ ADD COLUMN sentinel_unfetched_f64_bits INTEGER NOT NULL DEFAULT 0")
             cur.execute("UPDATE __col_series__ SET sentinel_unfetched_f64_bits = sentinel_f64_bits")
+        if "high_water_ts_us" not in series_cols:
+            cur.execute("ALTER TABLE __col_series__ ADD COLUMN high_water_ts_us INTEGER")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS __col_slice__ (

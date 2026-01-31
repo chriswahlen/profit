@@ -42,6 +42,7 @@ class StooqUsHistorySeeder:
         self.force = force
         self.ttl = ttl
         self._series_cache: dict[tuple[str, str], int] = {}
+        self._series_high_water: dict[int, int | None] = {}
 
     def seed(self) -> SeedResult:
         base = self._find_base_path()
@@ -70,6 +71,7 @@ class StooqUsHistorySeeder:
     def _ingest(self, base: Path) -> int:
         total_points = 0
         buffers: dict[int, list[tuple[datetime, float]]] = {}
+        max_written: dict[int, int] = {}
         files = list(base.rglob("*.txt"))
         self._precreate_series(files, base)
 
@@ -93,6 +95,7 @@ class StooqUsHistorySeeder:
             logging.info("Stooq US history reading file %s", txt)
             for record in iterate_stooq_rows(txt):
                 ts = record["date"]
+                ts_us = int(ts.timestamp() * 1_000_000)
                 instrument_id = self._instrument_id(mic, record["ticker"])
                 data = {
                     "open": record["open"],
@@ -104,11 +107,20 @@ class StooqUsHistorySeeder:
                 }
                 for field, value in data.items():
                     sid = self._series_id(instrument_id, field)
+                    high = self._series_high_water.get(sid)
+                    if high is not None and ts_us <= high:
+                        continue
                     buffers.setdefault(sid, []).append((ts, value))
+                    prev = max_written.get(sid)
+                    if prev is None or ts_us > prev:
+                        max_written[sid] = ts_us
                 if sum(len(v) for v in buffers.values()) >= 50_000:
                     flush()
 
         flush()
+        for sid, ts_us in max_written.items():
+            self.store.bump_high_water_ts_us(sid, ts_us)
+            self._series_high_water[sid] = ts_us
         return total_points
 
     def _venue_from_parts(self, parts: tuple[str, ...]) -> str:
@@ -135,6 +147,8 @@ class StooqUsHistorySeeder:
             sentinel_f64=float("nan"),
         )
         self._series_cache[key] = series_id
+        if series_id not in self._series_high_water:
+            self._series_high_water[series_id] = self.store.get_high_water_ts_us(series_id)
         return series_id
 
     def _instrument_id(self, mic: str, ticker: str) -> str:

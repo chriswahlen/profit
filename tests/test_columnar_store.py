@@ -805,6 +805,30 @@ def test_checksum_disabled_truncated_blob_raises_decode(tmp_path):
         store.read_slice_values(sid, 0)
 
 
+def test_high_water_mark_roundtrip(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid = store.create_series(
+        instrument_id="AAPL",
+        dataset="bar_ohlcv",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    assert store.get_series(sid).high_water_ts_us is None
+
+    store.bump_high_water_ts_us(sid, 1_000_000)
+    assert store.get_series(sid).high_water_ts_us == 1_000_000
+
+    # Lower bumps should be ignored.
+    store.bump_high_water_ts_us(sid, 500_000)
+    assert store.get_series(sid).high_water_ts_us == 1_000_000
+
+    store.close()
+    reopened = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    assert reopened.get_series(sid).high_water_ts_us == 1_000_000
+
+
 def test_include_sentinel_true_with_nan(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
