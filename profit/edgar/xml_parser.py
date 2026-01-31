@@ -78,7 +78,8 @@ def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
             inner_html = match.group(1).strip()
         if not inner_html:
             inner_html = text_raw
-        if _looks_like_html(inner_html):
+        if _looks_like_html(inner_html) or "textblock" in tag.lower():
+            # If it looks like HTML or is an XBRL text block, render to markdown for readability.
             text = html_to_markdown(inner_html)
             logger.info("converted HTML to markdown for %s", tag)
         unit_ref = attrs.get("unitRef")

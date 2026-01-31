@@ -18,6 +18,11 @@ HTML_XBRL = b"""
 </xbrli:xbrl>
 """
 
+TEXTBLOCK_XBRL = b"""
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance">
+  <us-gaap:SomeTextBlock xmlns:us-gaap="http://fasb.org/us-gaap/2020-01-31"><p>Line1</p><p>Line2</p></us-gaap:SomeTextBlock>
+</xbrli:xbrl>
+"""
 
 def test_parse_xbrl_extracts_numeric_facts():
     parsed = parse_xbrl(SIMPLE_XBRL)
@@ -40,3 +45,10 @@ def test_parse_xbrl_converts_html_unparsed():
     assert len(parsed.facts) == 1
     assert len(parsed.unparsed) == 1
     assert "See **details** in *Appendix*." in parsed.unparsed[0]["text"]
+
+
+def test_parse_xbrl_converts_textblock_html():
+    parsed = parse_xbrl(TEXTBLOCK_XBRL)
+    assert len(parsed.unparsed) == 1
+    assert "Line1" in parsed.unparsed[0]["text"]
+    assert "**" not in parsed.unparsed[0]["text"]  # simple paragraphs render to spacing
