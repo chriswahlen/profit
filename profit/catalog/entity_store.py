@@ -79,8 +79,7 @@ class EntityStore:
                 active_from TEXT,
                 active_to   TEXT,
                 last_seen   TEXT NOT NULL,
-                source_note TEXT,
-                PRIMARY KEY (entity_id, scheme, value, active_from)
+                PRIMARY KEY (entity_id, scheme, value)
             );
             CREATE INDEX IF NOT EXISTS idx_identifier_scheme_value ON entity_identifier(scheme, value);
             CREATE INDEX IF NOT EXISTS idx_identifier_entity ON entity_identifier(entity_id);
@@ -102,7 +101,7 @@ class EntityStore:
             CREATE INDEX IF NOT EXISTS idx_finance_entity_period ON company_finance_fact(entity_id, period_end);
             CREATE INDEX IF NOT EXISTS idx_finance_provider_entity ON company_finance_fact(provider_id, provider_entity_id);
             CREATE INDEX IF NOT EXISTS idx_finance_report_lookup ON company_finance_fact(provider_id, provider_entity_id, report_id, report_key, period_end);
-            """
+        """
         )
         self.conn.commit()
 
@@ -179,7 +178,6 @@ class EntityStore:
                     _dt_to_str(r.active_from) if r.active_from else None,
                     _dt_to_str(r.active_to) if r.active_to else None,
                     _dt_to_str(r.last_seen or now),
-                    r.source_note,
                 )
             )
         if not rows:
@@ -188,14 +186,14 @@ class EntityStore:
         cur.executemany(
             """
             INSERT INTO entity_identifier (
-                entity_id, scheme, value, provider_id, active_from, active_to, last_seen, source_note
+                entity_id, scheme, value, provider_id, active_from, active_to, last_seen
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(entity_id, scheme, value, active_from) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_id, scheme, value) DO UPDATE SET
                 provider_id=excluded.provider_id,
+                active_from=COALESCE(entity_identifier.active_from, excluded.active_from),
                 active_to=excluded.active_to,
-                last_seen=MAX(entity_identifier.last_seen, excluded.last_seen),
-                source_note=COALESCE(excluded.source_note, entity_identifier.source_note)
+                last_seen=MAX(entity_identifier.last_seen, excluded.last_seen)
             """,
             rows,
         )

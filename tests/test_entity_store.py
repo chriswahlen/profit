@@ -34,7 +34,6 @@ def test_identifier_upsert_updates_last_seen(tmp_path):
         active_from=None,
         active_to=None,
         last_seen=first_seen,
-        source_note=None,
     )
     store.upsert_identifiers([rec])
 

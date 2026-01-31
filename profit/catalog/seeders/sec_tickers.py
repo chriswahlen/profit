@@ -49,7 +49,6 @@ class SecCompanyTickerSeeder:
         self.ttl = ttl
         self.fetch_fn = fetch_fn
         self.default_country = default_country
-        self.default_active_from = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
     def load_raw(self) -> dict:
         user_agent = get_setting(SEC_UA_ENV)
@@ -101,14 +100,12 @@ class SecCompanyTickerSeeder:
                         scheme="sec:cik",
                         value=f"{cik_str:010d}",
                         provider_id=SEC_PROVIDER_ID,
-                        active_from=self.default_active_from,
                     ),
                     EntityIdentifierRecord(
                         entity_id=entity_id,
                         scheme="ticker:us",
                         value=ticker,
                         provider_id=SEC_PROVIDER_ID,
-                        active_from=self.default_active_from,
                     ),
                 ]
             )

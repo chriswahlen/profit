@@ -64,7 +64,6 @@ class EntityIdentifierRecord:
     active_from: datetime | None = None
     active_to: datetime | None = None
     last_seen: datetime | None = None
-    source_note: str | None = None
 
 
 @dataclass(frozen=True)
