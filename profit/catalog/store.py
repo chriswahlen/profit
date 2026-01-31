@@ -51,7 +51,6 @@ class CatalogStore:
             CREATE TABLE IF NOT EXISTS instrument (
                 instrument_id   TEXT PRIMARY KEY,
                 instrument_type TEXT NOT NULL,
-                entity_id       TEXT,
                 description     TEXT,
                 mic_primary     TEXT,
                 currency        TEXT,
@@ -111,7 +110,6 @@ class CatalogStore:
                 (
                     r.instrument_id,
                     r.instrument_type,
-                    None,  # entity_id unknown at this layer
                     None,  # description
                     r.mic,
                     r.currency,
@@ -134,10 +132,10 @@ class CatalogStore:
         cur.executemany(
             """
             INSERT INTO instrument (
-                instrument_id, instrument_type, entity_id, description, mic_primary, currency,
+                instrument_id, instrument_type, description, mic_primary, currency,
                 status, active_from, active_to
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(instrument_id) DO UPDATE SET
                 instrument_type=excluded.instrument_type,
                 mic_primary=COALESCE(excluded.mic_primary, instrument.mic_primary),
