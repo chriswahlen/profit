@@ -13,6 +13,7 @@ from profit.sources.edgar import (
     EdgarSubmissionsFetcher,
     EdgarSubmissionsRequest,
     EdgarAccessionReader,
+    should_skip_accession_file,
 )
 from profit.sources.types import LifecycleReader
 from profit.catalog.refresher import CatalogChecker
@@ -139,7 +140,8 @@ def main() -> None:
                         name = item.get("name")
                     else:
                         name = str(item)
-                    if not name:
+                    if not name or should_skip_accession_file(args.accession, name):
+                        logging.info("skipping %s", name or "<missing name>")
                         continue
                     file_names.append(name)
                     print(f"- {name}")
