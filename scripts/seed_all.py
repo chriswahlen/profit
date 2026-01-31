@@ -14,6 +14,7 @@ from profit.catalog.seeders import (
     StooqDailySeeder,
     StooqUsEquitySeeder,
     StooqUsHistorySeeder,
+    StooqWorldHistorySeeder,
 )
 from profit.catalog.store import CatalogStore
 from profit.config import ProfitConfig
@@ -82,6 +83,17 @@ def seed_stooq_us_history(sql_store: ColumnarSqliteStore, data_root: Path, *, fo
     logging.info("Stooq US history seeded rows=%s", result.rows_written)
 
 
+def seed_stooq_world_history(sql_store: ColumnarSqliteStore, data_root: Path, *, force: bool, ttl_days: int) -> None:
+    seeder = StooqWorldHistorySeeder(
+        store=sql_store,
+        data_root=data_root,
+        force=force,
+        ttl=timedelta(days=ttl_days),
+    )
+    result = seeder.seed()
+    logging.info("Stooq world history seeded rows=%s", result.rows_written)
+
+
 def register_stooq_provider(store: EntityStore) -> None:
     store.upsert_providers([("stooq", "Stooq Daily", "Stooq daily dataset download")])
 
@@ -111,6 +123,10 @@ def main() -> None:
     register_stooq_provider(store)
     seed_stooq_us(catalog, data_root, force=args.force, ttl_days=args.ttl_days)
     seed_stooq_us_history(sql_store, data_root, force=args.force, ttl_days=args.ttl_days)
+    seed_stooq_world_history(sql_store, data_root, force=args.force, ttl_days=args.ttl_days)
+    checkpoint_info = sql_store.checkpoint(mode="PASSIVE")
+    logging.info("Columnar store checkpoint PASSIVE busy=%s log=%s checkpointed=%s", *checkpoint_info)
+    sql_store.close()
     seed_stooq(catalog, data_root, force=args.force, ttl_days=args.ttl_days)
     seed_sec(store, cache, args.offline, args.ttl_days, force=args.force)
 

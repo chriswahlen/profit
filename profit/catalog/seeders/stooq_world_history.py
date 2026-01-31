@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from profit.cache.columnar_store import ColumnarSqliteStore
-from profit.catalog.seeders.stooq_us_equities import StooqUsEquitySeeder
+from profit.catalog.seeders.stooq_common import canonical_instrument_id
 from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 
 
@@ -17,17 +17,16 @@ class SeedResult:
     rows_written: int
 
 
-class StooqUsHistorySeeder:
+class StooqWorldHistorySeeder:
     """
-    Load historical daily OHLCV for U.S. symbols from the Stooq `d_us_txt` dataset
-    into the columnar store (`ColumnarSqliteStore`) as fixed-step series per field.
+    Load historical daily OHLCV for global Stooq symbols into the columnar store.
     """
 
-    DATASET = "stooq_bar_ohlcv"
-    SEEDER_KEY = "stooq_us_history"
-    STEP_US = 86_400_000_000  # daily
-    WINDOW_POINTS = 1095      # 3 years per slice
-    GRID_ORIGIN = datetime(1900, 1, 1, tzinfo=timezone.utc)
+    DATASET = "stooq_world_bar_ohlcv"
+    SEEDER_KEY = "stooq_world_history"
+    STEP_US = 86_400_000_000
+    WINDOW_POINTS = 1095
+    GRID_ORIGIN = datetime(1750, 1, 1, tzinfo=timezone.utc)
 
     def __init__(
         self,
@@ -46,7 +45,7 @@ class StooqUsHistorySeeder:
     def seed(self) -> SeedResult:
         base = self._find_base_path()
         if base is None:
-            logging.warning("Stooq US history base path missing under %s", self.data_root)
+            logging.warning("Stooq world history base path missing under %s", self.data_root)
             return SeedResult(rows_written=0)
 
         ensure_seed_metadata(self.store._conn)
@@ -54,7 +53,7 @@ class StooqUsHistorySeeder:
             age = self._last_run_age()
             remaining = max(self.ttl - age, timedelta(0))
             logging.info(
-                "Stooq US history seeder skipped: last_run_age=%s ttl=%s next_refresh_in=%s",
+                "Stooq world history seeder skipped: last_run_age=%s ttl=%s next_refresh_in=%s",
                 age,
                 self.ttl,
                 remaining,
@@ -63,34 +62,31 @@ class StooqUsHistorySeeder:
 
         written = self._ingest(base)
         self._bump_metadata()
-        logging.info("Stooq US history wrote rows=%s", written)
+        logging.info("Stooq world history wrote rows=%s", written)
         return SeedResult(rows_written=written)
 
-    # ------------------------------------------------------------------
     def _ingest(self, base: Path) -> int:
         total_points = 0
         buffers: dict[int, list[tuple[datetime, float]]] = {}
         files = list(base.rglob("*.txt"))
         self._precreate_series(files, base)
 
-        def flush() -> int:
+        def flush() -> None:
             nonlocal total_points
-            flushed = 0
-            for series_id, pts in buffers.items():
+            for series_id, pts in list(buffers.items()):
                 if not pts:
                     continue
                 self.store.write(series_id, pts)
-                flushed += len(pts)
-            total_points += flushed
+                total_points += len(pts)
             buffers.clear()
-            return flushed
 
         for txt in files:
+            logging.info("Stooq world history reading file %s", txt)
             relative = txt.relative_to(base)
-            venue = self._venue_from_parts(relative.parts)
-            mic = StooqUsEquitySeeder.MIC_BY_FOLDER.get(venue, "")
+            parts = [p.lower() for p in relative.parts[:-1]]
+            ticker = txt.stem.upper()
+            instrument_id = canonical_instrument_id(ticker, parts)
 
-            logging.info("Stooq US history reading file %s", txt)
             try:
                 with txt.open("r", newline="") as fh:
                     reader = csv.reader(fh)
@@ -100,14 +96,13 @@ class StooqUsHistorySeeder:
                     for record in reader:
                         if len(record) < 9:
                             continue
-                        ticker, per, date_str, _time, o, h, l, c, vol, *rest = record
+                        ticker_value, per, date_str, _time, o, h, l, c, vol, *rest = record
                         if per != "D":
                             continue
                         try:
                             ts = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
                         except ValueError:
                             continue
-                        instrument_id = self._instrument_id(mic, ticker)
                         data = {
                             "open": float(o),
                             "high": float(h),
@@ -126,13 +121,6 @@ class StooqUsHistorySeeder:
 
         flush()
         return total_points
-
-    def _venue_from_parts(self, parts: tuple[str, ...]) -> str:
-        # parts like ("nyse stocks", "1", "aapl.us.txt") or with leading directories
-        if len(parts) >= 1:
-            tokens = parts[0].split()
-            return tokens[0].lower()
-        return ""
 
     def _series_id(self, instrument_id: str, field: str) -> int:
         key = (instrument_id, field)
@@ -153,29 +141,31 @@ class StooqUsHistorySeeder:
         self._series_cache[key] = series_id
         return series_id
 
-    def _instrument_id(self, mic: str, ticker: str) -> str:
-        base_ticker = ticker.split(".", 1)[0]
-        return f"{mic or 'STOOQ'}|{base_ticker}"
-
-    def _precreate_series(self, files: list[Path], base: Path) -> None:
-        fields = ("open", "high", "low", "close", "volume", "openint")
-        for txt in files:
-            relative = txt.relative_to(base)
-            venue = self._venue_from_parts(relative.parts)
-            mic = StooqUsEquitySeeder.MIC_BY_FOLDER.get(venue, "")
-            instrument_id = self._instrument_id(mic, txt.stem.upper())
-            for field in fields:
-                self._series_id(instrument_id, field)
-
     def _find_base_path(self) -> Path | None:
         candidates = [
-            self.data_root / "market" / "d_us_txt" / "data" / "daily" / "us",
-            self.data_root / "datasets" / "market" / "d_us_txt" / "data" / "daily" / "us",
+            self.data_root / "market" / "d_world_txt" / "data" / "daily" / "world",
+            self.data_root
+            / "datasets"
+            / "market"
+            / "d_world_txt"
+            / "data"
+            / "daily"
+            / "world",
         ]
         for candidate in candidates:
             if candidate.exists():
                 return candidate
         return None
+
+    def _precreate_series(self, files: list[Path], base: Path) -> None:
+        fields = ("open", "high", "low", "close", "volume", "openint")
+        for txt in files:
+            relative = txt.relative_to(base)
+            parts = [p.lower() for p in relative.parts[:-1]]
+            ticker = txt.stem.upper()
+            instrument_id = canonical_instrument_id(ticker, parts)
+            for field in fields:
+                self._series_id(instrument_id, field)
 
     def _should_skip(self) -> bool:
         last = read_seed_metadata(self.store._conn, self.SEEDER_KEY)

@@ -36,6 +36,7 @@ class CatalogStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         uri = f"file:{self.db_path.as_posix()}" + ("?mode=ro" if readonly else "")
         self.conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+        self.conn.execute("PRAGMA busy_timeout=5000")
         if not readonly:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")

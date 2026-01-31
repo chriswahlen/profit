@@ -102,6 +102,7 @@ class ColumnarSqliteStore:
         # Explicitly size the statement cache (default 128) to favor reuse of our
         # hot statements in write/read paths.
         self._conn = sqlite3.connect(self.db_path, cached_statements=256)
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
@@ -338,6 +339,10 @@ class ColumnarSqliteStore:
         """Run a VACUUM to reclaim space; requires no open write transactions."""
         self._conn.execute("VACUUM")
         self._conn.commit()
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        self._conn.close()
 
     # Writes -----------------------------------------------------------
     def write(self, series_id: int, points: Iterable[tuple[datetime, float]]) -> None:

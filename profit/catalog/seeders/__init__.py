@@ -7,6 +7,7 @@ from .open_exchange_rates import OpenExchangeRatesCurrencySeeder
 from .stooq_daily import StooqDailySeeder
 from .stooq_us_equities import StooqUsEquitySeeder
 from .stooq_us_history import StooqUsHistorySeeder
+from .stooq_world_history import StooqWorldHistorySeeder
 
 __all__ = [
     "SecCompanyTickerSeeder",
@@ -14,4 +15,5 @@ __all__ = [
     "StooqDailySeeder",
     "StooqUsEquitySeeder",
     "StooqUsHistorySeeder",
+    "StooqWorldHistorySeeder",
 ]
