@@ -148,6 +148,38 @@ class ColumnarSqliteStore:
         FROM __col_series__
         WHERE instrument_id = ? AND dataset = ? AND field = ? AND step_us = ?
         """
+    _SELECT_ALL_SERIES_SQL = """
+        SELECT
+            series_id,
+            instrument_id,
+            dataset,
+            field,
+            step_us,
+            grid_origin_ts_us,
+            window_points,
+            compression,
+            offsets_enabled,
+            checksum_enabled,
+            sentinel_f64_bits,
+            sentinel_unfetched_f64_bits
+        FROM __col_series__
+        """
+    _SELECT_ALL_SERIES_SQL = """
+        SELECT
+            series_id,
+            instrument_id,
+            dataset,
+            field,
+            step_us,
+            grid_origin_ts_us,
+            window_points,
+            compression,
+            offsets_enabled,
+            checksum_enabled,
+            sentinel_f64_bits,
+            sentinel_unfetched_f64_bits
+        FROM __col_series__
+        """
 
     DEFAULT_PENDING_LIMIT = 32
 
@@ -170,7 +202,9 @@ class ColumnarSqliteStore:
         self._pending_slices: list[tuple[int, int, bytes, bytes, bytes, int]] = []
         self._pending_limit = pending_limit if pending_limit is not None else self.DEFAULT_PENDING_LIMIT
         self._dedupe_pending = dedupe_pending
+        self._series_cache: dict[int, SeriesConfig] = {}
         self._init_schema()
+        self._preload_series_cache()
 
     def _cursor(self, key: str) -> sqlite3.Cursor:
         cur = self._cursor_cache.get(key)
@@ -237,14 +271,39 @@ class ColumnarSqliteStore:
             ),
         )
         self._conn.commit()
-        return int(cur.lastrowid)
+        series_id = int(cur.lastrowid)
+        cfg = SeriesConfig(
+            series_id=series_id,
+            instrument_id=instrument_id,
+            dataset=dataset,
+            field=field,
+            step_us=int(step_us),
+            grid_origin_ts_us=int(grid_origin_ts_us),
+            window_points=int(window_points),
+            compression=compression,
+            offsets_enabled=bool(offsets_enabled),
+            checksum_enabled=bool(checksum_enabled),
+            sentinel_f64=float(sentinel_f64),
+            sentinel_f64_bits=int(sentinel_bits),
+            sentinel_unfetched_f64=float(sentinel_unfetched_f64),
+            sentinel_unfetched_f64_bits=int(sentinel_unfetched_bits),
+        )
+        self._series_cache[series_id] = cfg
+        return series_id
 
     def get_series(self, series_id: int) -> SeriesConfig:
+        if series_id in self._series_cache:
+            return self._series_cache[series_id]
         cur = self._cursor("select_series")
         cur.execute(self._SELECT_SERIES_SQL, (int(series_id),))
         row = cur.fetchone()
         if row is None:
             raise SeriesNotFoundError(series_id)
+        cfg = self._row_to_series_config(row)
+        self._series_cache[series_id] = cfg
+        return cfg
+
+    def _row_to_series_config(self, row: sqlite3.Row) -> SeriesConfig:
         sentinel_bits = int(row[10])
         sentinel_unfetched_bits = int(row[11]) if len(row) > 11 else 0
         if sentinel_unfetched_bits == 0 or sentinel_unfetched_bits == sentinel_bits:
@@ -278,6 +337,7 @@ class ColumnarSqliteStore:
         cur.execute(self._DELETE_SLICES_SQL, (int(series_id),))
         cur = self._cursor("delete_series")
         cur.execute(self._DELETE_SERIES_SQL, (int(series_id),))
+        self._series_cache.pop(int(series_id), None)
         self._conn.commit()
 
     def get_series_id(
@@ -675,6 +735,13 @@ class ColumnarSqliteStore:
         if "completeness" not in cols:
             cur.execute("ALTER TABLE __col_slice__ ADD COLUMN completeness INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
+
+    def _preload_series_cache(self) -> None:
+        cur = self._cursor("select_all_series")
+        cur.execute(self._SELECT_ALL_SERIES_SQL)
+        for row in cur.fetchall():
+            cfg = self._row_to_series_config(row)
+            self._series_cache[cfg.series_id] = cfg
 
     def _load_or_init_slice(
         self,
