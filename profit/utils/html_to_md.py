@@ -14,10 +14,14 @@ class Markdownifier(HTMLParser):
         self.current_row: list[Dict[str, str]] | None = None
         self.current_cell: list[str] | None = None
         self.current_cell_attrs: Dict[str, str] | None = None
+        self.script_mode = False
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
         attrs_map = {k.lower(): v for k, v in attrs}
+        if tag == "script":
+            self.script_mode = True
+            return
         if tag in {"b", "strong"}:
             self.parts.append("**")
         elif tag in {"i", "em", "u"}:
@@ -42,6 +46,9 @@ class Markdownifier(HTMLParser):
 
     def handle_endtag(self, tag):
         tag = tag.lower()
+        if tag == "script":
+            self.script_mode = False
+            return
         if tag in {"b", "strong"}:
             self.parts.append("**")
         elif tag in {"i", "em", "u"}:
@@ -77,6 +84,8 @@ class Markdownifier(HTMLParser):
             self.current_cell_attrs = None
 
     def handle_data(self, data):
+        if self.script_mode:
+            return
         if self.table_mode and self.current_cell is not None:
             self.current_cell.append(data)
         else:

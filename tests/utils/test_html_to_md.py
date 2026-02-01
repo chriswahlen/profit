@@ -81,3 +81,10 @@ def test_html_to_markdown_trims_redundant_newlines():
     md = html_to_markdown(html)
     assert "Line1" in md and "Line2" in md
     assert "\n\n\n" not in md
+
+
+def test_html_to_markdown_removes_script_blocks():
+    html = "<p>Safe</p><script>console.log('x');</script><p>After</p>"
+    md = html_to_markdown(html)
+    assert "console.log" not in md
+    assert "Safe" in md and "After" in md

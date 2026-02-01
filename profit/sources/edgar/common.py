@@ -47,6 +47,7 @@ IGNORED_EXTENSIONS = {
 }
 
 IGNORED_FILES = {"metalink.json", "metalinks.json", "filingsummary.xml"}
+IGNORED_SUFFIXES = ("_def.xml", "_pre.xml", "_cal.xml", "_lab.xml")
 
 
 def is_main_submission_text(accession: str, file_name: str) -> bool:
@@ -62,5 +63,7 @@ def should_skip_accession_file(accession: str, file_name: str) -> bool:
         return True
     lower = file_name.lower()
     if lower in IGNORED_FILES:
+        return True
+    if lower.endswith(IGNORED_SUFFIXES):
         return True
     return any(lower.endswith(ext) for ext in IGNORED_EXTENSIONS)

@@ -37,3 +37,10 @@ def test_should_skip_xsd():
 
 def test_should_skip_filing_summary():
     assert should_skip_accession_file("0000320193-26-000006", "FilingSummary.xml")
+
+
+def test_should_skip_xbrl_aux_files():
+    assert should_skip_accession_file("0000320193-26-000006", "aapl-20251227_def.xml")
+    assert should_skip_accession_file("0000320193-26-000006", "aapl-20251227_pre.xml")
+    assert should_skip_accession_file("0000320193-26-000006", "aapl-20251227_cal.xml")
+    assert should_skip_accession_file("0000320193-26-000006", "aapl-20251227_lab.xml")

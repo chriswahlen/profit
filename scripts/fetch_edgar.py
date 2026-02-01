@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,8 @@ from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.edgar import EdgarDatabase
 from profit.edgar.zip_utils import expand_zip_archive
+from profit.edgar.xml_sanitizer import markdown_textblocks
+from profit.sources.edgar import convert_html_to_markdown_bytes
 from profit.sources.edgar import (
     EdgarSubmissionsFetcher,
     EdgarSubmissionsRequest,
@@ -164,18 +167,46 @@ def main() -> None:
                             if already_seen:
                                 logging.info("dedup skipping %s (source=%s)", entry_name, name)
                                 continue
+                            if entry_name.lower().endswith(".xml"):
+                                _debug_dump(args.accession, entry_name, entry_payload, "before")
+                                entry_payload = markdown_textblocks(entry_payload)
+                                _debug_dump(args.accession, entry_name, entry_payload, "after")
+                            elif entry_name.lower().endswith((".htm", ".html")):
+                                _debug_dump(args.accession, entry_name, entry_payload, "before_html")
+                                entry_payload = convert_html_to_markdown_bytes(entry_name, entry_payload)
+                                _debug_dump(args.accession, entry_name, entry_payload, "md")
                             edgar_db.store_file(args.accession, entry_name, entry_payload)
                             existing_names.add(entry_name)
-                        edgar_db.store_file(args.accession, name, b"")
+                        # Do not store the raw zip; we keep expanded files only.
                         continue
                     try:
                         payload = reader.fetch_file(args.cik, args.accession, name)
                     except PermanentFetchError as file_exc:
                         logging.warning("skipping file due to fetch error %s %s", name, file_exc)
                         continue
+                    if name.lower().endswith(".xml"):
+                        _debug_dump(args.accession, name, payload, "before")
+                        payload = markdown_textblocks(payload)
+                        _debug_dump(args.accession, name, payload, "after")
+                    elif name.lower().endswith((".htm", ".html")):
+                        _debug_dump(args.accession, name, payload, "before_html")
+                        payload = convert_html_to_markdown_bytes(name, payload)
+                        _debug_dump(args.accession, name, payload, "md")
                     edgar_db.store_file(args.accession, name, payload)
     finally:
         edgar_db.close()
+
+
+def _debug_dump(accession: str, name: str, payload: bytes, label: str) -> None:
+    try:
+        tmp_dir = Path(tempfile.gettempdir()) / "edgar_xml_debug"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = name.replace("/", "_")
+        path = tmp_dir / f"{accession}_{safe_name}.{label}"
+        path.write_bytes(payload)
+        logging.info("debug output path=%s", path)
+    except Exception as exc:  # pragma: no cover - best-effort debug
+        logging.warning("failed to write debug file for %s (%s)", name, exc)
 
 
 if __name__ == "__main__":
