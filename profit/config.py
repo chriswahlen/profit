@@ -113,7 +113,7 @@ def add_common_cli_args(
     parser,
     *,
     cache_help_subdir: str = "fetcher",
-    default_store_filename: str = "columnar.sqlite3",
+    default_store_filename: str = "profit.sqlite3",
 ):
     """
     Add shared CLI arguments for cache/store/log level.

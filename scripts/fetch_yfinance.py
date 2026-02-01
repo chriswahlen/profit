@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--ttl-days", type=int, default=1, help="Cache TTL days (default 1)")
     parser.add_argument("--offline", action="store_true", help="Use cache only; skip network requests")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and log counts without writing to the columnar store")
-    add_common_cli_args(parser, cache_help_subdir="yfinance", default_store_filename="columnar.sqlite3")
+    add_common_cli_args(parser, cache_help_subdir="yfinance")
     args = parser.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
