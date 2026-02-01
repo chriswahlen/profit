@@ -748,13 +748,6 @@ class ColumnarSqliteStore:
             )
             """
         )
-        cur.execute("PRAGMA table_info(__col_series__)")
-        series_cols = {row[1] for row in cur.fetchall()}
-        if "sentinel_unfetched_f64_bits" not in series_cols:
-            cur.execute("ALTER TABLE __col_series__ ADD COLUMN sentinel_unfetched_f64_bits INTEGER NOT NULL DEFAULT 0")
-            cur.execute("UPDATE __col_series__ SET sentinel_unfetched_f64_bits = sentinel_f64_bits")
-        if "high_water_ts_us" not in series_cols:
-            cur.execute("ALTER TABLE __col_series__ ADD COLUMN high_water_ts_us INTEGER")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS __col_slice__ (
@@ -768,11 +761,6 @@ class ColumnarSqliteStore:
             )
             """
         )
-        # Backfill completeness column for existing installs.
-        cur.execute("PRAGMA table_info(__col_slice__)")
-        cols = {row[1] for row in cur.fetchall()}
-        if "completeness" not in cols:
-            cur.execute("ALTER TABLE __col_slice__ ADD COLUMN completeness INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
 
     def _preload_series_cache(self) -> None:
