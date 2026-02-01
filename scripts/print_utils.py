@@ -15,12 +15,14 @@ def print_points(
     end: datetime,
     *,
     step_us: int,
+    provider_id: str,
 ) -> None:
     for field in fields:
         series_id = store.get_series_id(
             instrument_id=instrument_id,
             field=field,
             step_us=step_us,
+            provider_id=provider_id,
         )
         if series_id is None:
             print(f"No series for {field} (dataset={dataset})")

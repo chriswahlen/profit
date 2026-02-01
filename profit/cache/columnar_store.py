@@ -149,7 +149,7 @@ class ColumnarSqliteStore:
     _SELECT_SERIES_ID_SQL = """
         SELECT series_id
         FROM __col_series__
-        WHERE instrument_id = ? AND field = ? AND step_us = ?
+        WHERE instrument_id = ? AND field = ? AND step_us = ? AND provider_id = ?
         """
     _SELECT_ALL_SERIES_SQL = """
         SELECT
@@ -212,7 +212,7 @@ class ColumnarSqliteStore:
         *,
         instrument_id: str,
         field: str,
-        provider_id: str | None = None,
+        provider_id: str = "unknown",
         step_us: int,
         grid_origin_ts_us: int,
         window_points: int,
@@ -223,6 +223,8 @@ class ColumnarSqliteStore:
         sentinel_unfetched_f64: float | None = None,
         high_water_ts_us: int | None = None,
     ) -> int:
+        if not provider_id:
+            provider_id = "unknown"
         if step_us <= 0:
             raise ValueError("step_us must be > 0")
         if window_points <= 0:
@@ -348,6 +350,7 @@ class ColumnarSqliteStore:
         instrument_id: str,
         field: str,
         step_us: int,
+        provider_id: str = "unknown",
     ) -> int | None:
         """
         Look up a series_id by its natural unique key.
@@ -357,7 +360,7 @@ class ColumnarSqliteStore:
         cur = self._cursor("select_series_id")
         cur.execute(
             self._SELECT_SERIES_ID_SQL,
-            (instrument_id, field, int(step_us)),
+            (instrument_id, field, int(step_us), provider_id),
         )
         row = cur.fetchone()
         if row is None:
@@ -390,7 +393,7 @@ class ColumnarSqliteStore:
         *,
         instrument_id: str,
         field: str,
-        provider_id: str | None = None,
+        provider_id: str,
         step_us: int,
         grid_origin_ts_us: int,
         window_points: int,
@@ -406,6 +409,7 @@ class ColumnarSqliteStore:
             instrument_id=instrument_id,
             field=field,
             step_us=step_us,
+            provider_id=provider_id,
         )
         if existing is not None:
             return existing
@@ -734,7 +738,7 @@ class ColumnarSqliteStore:
                 series_id INTEGER PRIMARY KEY,
                 instrument_id TEXT NOT NULL,
                 field TEXT NOT NULL,
-                provider_id TEXT,
+        provider_id TEXT NOT NULL DEFAULT 'unknown',
                 step_us INTEGER NOT NULL,
                 grid_origin_ts_us INTEGER NOT NULL,
                 window_points INTEGER NOT NULL,
@@ -744,7 +748,7 @@ class ColumnarSqliteStore:
                 sentinel_f64_bits INTEGER NOT NULL,
                 sentinel_unfetched_f64_bits INTEGER NOT NULL,
                 high_water_ts_us INTEGER,
-                UNIQUE (instrument_id, field, step_us)
+                UNIQUE (instrument_id, field, step_us, provider_id)
             )
             """
         )

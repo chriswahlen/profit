@@ -792,6 +792,7 @@ def test_include_sentinel_true_with_nan(tmp_path):
     sid = store.create_series(
         instrument_id="AAPL",
         field="close",
+        provider_id="test",
         step_us=DAY_US,
         grid_origin_ts_us=0,
         window_points=2,
@@ -808,6 +809,7 @@ def test_get_series_id_missing_returns_none(tmp_path):
         instrument_id="MSFT",
         field="close",
         step_us=DAY_US,
+        provider_id="test",
     )
     assert series_id is None
 
@@ -817,6 +819,7 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     existing = store.create_series(
         instrument_id="MSFT",
         field="close",
+        provider_id="test",
         step_us=DAY_US,
         grid_origin_ts_us=0,
         window_points=2,
@@ -829,6 +832,7 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     sid = store.get_or_create_series(
         instrument_id="MSFT",
         field="close",
+        provider_id="test",
         step_us=DAY_US,
         grid_origin_ts_us=0,
         window_points=2,

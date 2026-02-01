@@ -63,10 +63,27 @@ def get_data_root() -> Path:
     raise RuntimeError("Data root not configured; set PROFIT_DATA_ROOT or use --data-root equivalent")
 
 
-def get_columnar_db_path(*, args=None, filename: str = "profit.sqlite3") -> Path:
+def get_columnar_db_path(*, args=None, filename: str = "profit.sqlite") -> Path:
+    """
+    Resolve the columnar SQLite path.
+
+    Priority:
+    1) Explicit --store-path
+    2) Existing preferred filename under data root (profit.sqlite)
+    3) The preferred filename under data root
+    """
     if args is not None and getattr(args, "store_path", None):
         return Path(args.store_path)
-    return get_data_root() / filename
+
+    root = get_data_root()
+    preferred = root / filename
+    legacy = root / "profit.sqlite"
+
+    if preferred.exists():
+        return preferred
+    if legacy.exists():
+        return legacy
+    return preferred
 
 
 
@@ -113,7 +130,7 @@ def add_common_cli_args(
     parser,
     *,
     cache_help_subdir: str = "fetcher",
-    default_store_filename: str = "profit.sqlite3",
+    default_store_filename: str = "profit.sqlite",
 ):
     """
     Add shared CLI arguments for cache/store/log level.
@@ -182,6 +199,17 @@ class ProfitConfig:
         yf_cache_dir = cfg.cache_root / "yfinance"
         os.environ.setdefault("YFINANCE_CACHE_DIR", str(yf_cache_dir))
         yf_cache_dir.mkdir(parents=True, exist_ok=True)
+        # Disable yfinance's SQLite fast-cache to avoid write failures when the
+        # cache directory is read-only or shared across sandboxes; we already
+        # handle HTTP caching via FileCache.
+        os.environ.setdefault("YFINANCE_USE_FAST_CACHE", "0")
+        # Force yfinance to use our writable cache dir for its tz/cookie caches.
+        try:
+            from yfinance import cache as yf_cache  # type: ignore
+            yf_cache.set_cache_location(str(yf_cache_dir))
+        except Exception:
+            # Best-effort; continue without altering yfinance cache location.
+            pass
 
     # Convenience helpers so callers can avoid global functions.
     @staticmethod
@@ -193,5 +221,5 @@ class ProfitConfig:
         return get_cache_root(args=args)
 
     @staticmethod
-    def resolve_columnar_db_path(*, args=None, filename: str = "profit.sqlite3") -> Path:
+    def resolve_columnar_db_path(*, args=None, filename: str = "profit.sqlite") -> Path:
         return get_columnar_db_path(args=args, filename=filename)

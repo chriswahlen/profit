@@ -71,7 +71,7 @@ def test_fetch_and_store_writes_columnar(tmp_path):
     )
 
     sid = stores.columnar.get_series_id(
-        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000
+        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000, provider_id="yfinance"
     )
     assert sid is not None
     points = stores.columnar.read_points(sid, start=idx[0], end=idx[-1], include_sentinel=False)
@@ -136,7 +136,7 @@ def test_dry_run_skips_writes(tmp_path):
     )
 
     sid = stores.columnar.get_series_id(
-        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000
+        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000, provider_id="yfinance"
     )
     assert sid is None
     stores.close()
@@ -179,7 +179,7 @@ def test_lookup_with_prefixed_provider_code(tmp_path):
     )
 
     sid = stores.columnar.get_series_id(
-        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000
+        instrument_id="EQ|AAPL", field="close", step_us=86_400_000_000, provider_id="yfinance"
     )
     assert sid is not None
     stores.close()
@@ -241,7 +241,7 @@ def test_fallback_to_available_provider_code(tmp_path):
     )
 
     sid = stores.columnar.get_series_id(
-        instrument_id="XNAS|AAPL", field="close", step_us=86_400_000_000
+        instrument_id="XNAS|AAPL", field="close", step_us=86_400_000_000, provider_id="yfinance"
     )
     assert sid is not None
     stores.close()

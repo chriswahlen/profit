@@ -182,7 +182,7 @@ def _catchup_window(
     instrument_id: str,
     default_start: datetime,
     now: datetime,
-) -> tuple[datetime, datetime]:
+) -> tuple[datetime, datetime, int]:
     """Return the window for catch-up fetches.
 
     The start date is the last recorded day in the columnar store for the
@@ -191,15 +191,18 @@ def _catchup_window(
     """
 
     latest_ts_us: int | None = None
-    for field in FIELD_ORDER:
-        sid = store.get_series_id(instrument_id=instrument_id, field=field, step_us=STEP_US)
-        if sid is None:
-            continue
-        hw = store.get_high_water_ts_us(sid)
-        if hw is None:
-            continue
-        if latest_ts_us is None or hw > latest_ts_us:
-            latest_ts_us = hw
+    cur = store._cursor("catchup_high_water")  # re-use connection
+    cur.execute(
+        """
+        SELECT MAX(high_water_ts_us)
+        FROM __col_series__
+        WHERE instrument_id = ? AND step_us = ?
+        """,
+        (instrument_id, STEP_US),
+    )
+    row = cur.fetchone()
+    if row:
+        latest_ts_us = row[0]
 
     if latest_ts_us is None:
         raise RuntimeError(
@@ -210,7 +213,7 @@ def _catchup_window(
     start = latest_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     if start > now:
         start = now
-    return start, now
+    return start, now, latest_ts_us
 
 
 def fetch_and_store_yfinance(
@@ -279,13 +282,24 @@ def fetch_and_store_yfinance(
         for inst in resolved:
             req = YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code)
             try:
-                start_i, end_i = _catchup_window(stores.columnar, inst.instrument_id, start, now)
+                start_i, end_i, last_ts_us = _catchup_window(stores.columnar, inst.instrument_id, start, now)
                 frames = fetcher.timeseries_fetch_many([req], start_i, end_i)
             except Exception:
                 for code in list(pending_derived):
                     stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
                 raise
             frame = frames[0] if frames else pd.DataFrame()
+            if frame is not None and not frame.empty:
+                last_dt = datetime.fromtimestamp(last_ts_us / 1_000_000, tz=timezone.utc)
+                newest_dt = frame.index.max().to_pydatetime()
+                logger.info(
+                    "yfinance catch-up fetched ticker=%s instrument_id=%s points=%s last_seen=%s newest_point=%s",
+                    inst.provider_code,
+                    inst.instrument_id,
+                    len(frame.index),
+                    last_dt.isoformat(),
+                    newest_dt.isoformat(),
+                )
             _consume_frame(
                 stores=stores,
                 resolved_inst=inst,

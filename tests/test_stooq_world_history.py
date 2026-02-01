@@ -38,6 +38,7 @@ def test_stooq_world_history_seeder(tmp_path: Path):
         instrument_id="XNAS|AAPL",
         field="close",
         step_us=86_400_000_000,
+        provider_id="stooq",
     )
     assert series_id is not None
     pts = col_store.read_points(

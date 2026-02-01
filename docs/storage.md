@@ -20,7 +20,7 @@ This page documents both SqliteStore (row/table-oriented) and ColumnarSqliteStor
 
 ## ColumnarSqliteStore (Packed Slices)
 
-ColumnarSqliteStore is a separate SQLite-backed storage mode intended for fixed-step numeric time series (v1: `float64` only). It stores one column (field) per series and stores values in packed arrays inside BLOBs.
+ColumnarSqliteStore is a separate SQLite-backed storage mode intended for fixed-step numeric time series (v1: `float64` only). It stores one column (field) per series and stores values in packed arrays inside BLOBs. Series are keyed by `(instrument_id, field, step_us, provider_id)`, so the same instrument/field can coexist for multiple providers.
 
 Key ideas:
 - A **series** defines the grid and decoding rules (step, origin, window size, compression, sentinel).
@@ -30,8 +30,8 @@ Key ideas:
 - Maintenance: the store opens SQLite in WAL mode (`journal_mode=WAL`, `synchronous=NORMAL`) and exposes `checkpoint()`, `optimize()`, and `vacuum()` helpers for periodic cleanup.
 
 ### Storage layout
-- Default path: `.cache/profit/profit.sqlite3` (or `$PROFIT_CACHE_DIR/profit.sqlite3`).
-- Series metadata table: `__col_series__` (includes optional `provider_id` for the source that created/owns each series)
+- Default path: `.cache/profit/profit.sqlite` (or `$PROFIT_CACHE_DIR/profit.sqlite`).
+- Series metadata table: `__col_series__` (includes `provider_id` for the source that created/owns each series; part of the unique key)
 - Slice table: `__col_slice__` with primary key `(series_id, start_index)`
 
 `start_index` is a grid index relative to the series origin:
