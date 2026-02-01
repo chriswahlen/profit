@@ -64,7 +64,13 @@ class EdgarDatabase:
             );
             """
         )
+        self._ensure_accession_file_url_column()
 
+    def _ensure_accession_file_url_column(self) -> None:
+        cur = self.conn.execute("PRAGMA table_info(edgar_accession_file)")
+        columns = {row["name"] for row in cur.fetchall()}
+        if "source_url" not in columns:
+            self.conn.execute("ALTER TABLE edgar_accession_file ADD COLUMN source_url TEXT")
     def close(self) -> None:
         if self._owns_conn:
             self.conn.close()
@@ -106,17 +112,27 @@ class EdgarDatabase:
             (cik, accession, base_url, len(files), ts),
         )
         if files:
-            existing = {row["file_name"] for row in self.conn.execute("SELECT file_name FROM edgar_accession_file WHERE accession = ?", (accession,)).fetchall()}
+            existing = {
+                row["file_name"]
+                for row in self.conn.execute(
+                    "SELECT file_name FROM edgar_accession_file WHERE accession = ?", (accession,)
+                ).fetchall()
+            }
             rows = []
             for name in files:
                 if not name:
                     continue
                 if name in existing:
                     continue
-                rows.append((accession, name, ts, None))
+                source_url = f"{base_url}{name}" if base_url else None
+                rows.append((accession, name, ts, None, source_url))
             if rows:
                 self.conn.executemany(
-                    "INSERT INTO edgar_accession_file (accession, file_name, fetched_at, compressed_payload) VALUES (?, ?, ?, ?)",
+                    """
+                    INSERT INTO edgar_accession_file (accession, file_name, fetched_at, compressed_payload, source_url)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(accession, file_name) DO UPDATE SET source_url=excluded.source_url
+                    """,
                     rows,
                 )
         self.conn.commit()
@@ -134,18 +150,27 @@ class EdgarDatabase:
         )
         return cur.fetchone() is not None
 
-    def store_file(self, accession: str, file_name: str, payload: bytes, *, fetched_at: datetime | None = None) -> None:
+    def store_file(
+        self,
+        accession: str,
+        file_name: str,
+        payload: bytes,
+        *,
+        fetched_at: datetime | None = None,
+        source_url: str | None = None,
+    ) -> None:
         ts = _iso(fetched_at)
         compressed = self._compress_payload(payload)
         self.conn.execute(
             """
-            INSERT INTO edgar_accession_file (accession, file_name, fetched_at, compressed_payload)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO edgar_accession_file (accession, file_name, fetched_at, compressed_payload, source_url)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(accession, file_name) DO UPDATE SET
                 fetched_at=excluded.fetched_at,
-                compressed_payload=excluded.compressed_payload
+                compressed_payload=excluded.compressed_payload,
+                source_url=COALESCE(excluded.source_url, edgar_accession_file.source_url)
             """,
-            (accession, file_name, ts, compressed),
+            (accession, file_name, ts, compressed, source_url),
         )
         self.conn.commit()
 
@@ -166,19 +191,19 @@ class EdgarDatabase:
         )
         return [row["file_name"] for row in cur.fetchall()]
 
+    def get_accession_files_info(self, accession: str) -> list[tuple[str, str | None]]:
+        cur = self.conn.execute(
+            "SELECT file_name, source_url FROM edgar_accession_file WHERE accession = ? ORDER BY file_name",
+            (accession,),
+        )
+        return [(row["file_name"], row["source_url"]) for row in cur.fetchall()]
+
     def known_accessions(self, cik: str) -> set[str]:
         """Return the set of accession numbers already recorded for a CIK."""
         cur = self.conn.execute("SELECT accession FROM edgar_accession WHERE cik = ?", (cik,))
         return {row["accession"] for row in cur.fetchall()}
 
     def has_accession(self, accession: str, *, cik: str | None = None) -> bool:
-        """Check whether an accession exists in the index table.
-
-        If ``cik`` is provided we scope the lookup, otherwise accession alone is
-        matched. This is mainly used by the fetch_edgar CLI to decide whether to
-        re-download an accession when ``--force`` is not specified.
-        """
-
         if cik is None:
             cur = self.conn.execute("SELECT 1 FROM edgar_accession WHERE accession = ? LIMIT 1", (accession,))
         else:
@@ -187,23 +212,7 @@ class EdgarDatabase:
             )
         return cur.fetchone() is not None
 
-    def known_accessions(self, cik: str) -> set[str]:
-        """Return the set of accession numbers already recorded for a CIK."""
-        cur = self.conn.execute("SELECT accession FROM edgar_accession WHERE cik = ?", (cik,))
-        return {row["accession"] for row in cur.fetchall()}
-
-    def has_accession(self, accession: str, *, cik: str | None = None) -> bool:
-        """Check whether an accession exists in the index table.
-
-        If ``cik`` is provided we scope the lookup, otherwise accession alone is
-        matched. This is mainly used by the fetch_edgar CLI to decide whether to
-        re-download an accession when ``--force`` is not specified.
-        """
-
-        if cik is None:
-            cur = self.conn.execute("SELECT 1 FROM edgar_accession WHERE accession = ? LIMIT 1", (accession,))
-        else:
-            cur = self.conn.execute(
-                "SELECT 1 FROM edgar_accession WHERE cik = ? AND accession = ? LIMIT 1", (cik, accession)
-            )
-        return cur.fetchone() is not None
+    def get_accession_base_url(self, accession: str) -> str | None:
+        cur = self.conn.execute("SELECT base_url FROM edgar_accession WHERE accession = ? LIMIT 1", (accession,))
+        row = cur.fetchone()
+        return row["base_url"] if row else None

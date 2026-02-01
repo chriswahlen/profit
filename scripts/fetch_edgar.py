@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import tempfile
 from datetime import timedelta
@@ -150,6 +151,12 @@ def main() -> None:
         action="store_true",
         help="Write PDF/XLSX attachments to a temp folder even if already cached",
     )
+    parser.add_argument(
+        "--attachment-links",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Record metadata for PDF/XLSX attachments so we can re-download them later (default: on)",
+    )
     parser.add_argument("--debug-dumps", action="store_true", help="Write pre/post-processing debug files to temp")
     parser.add_argument("--log-level", default="INFO", help="Logging level (default INFO)")
 
@@ -165,6 +172,50 @@ def main() -> None:
         edgar_db.close()
         raise SystemExit("User-Agent required: set --user-agent or PROFIT_SEC_USER_AGENT")
     attachment_dir = Path(tempfile.gettempdir()) / "edgar_attachments"
+    attachment_links_dir = attachment_dir / "links"
+    attachment_links: dict[str, dict[str, dict[str, object]]] = {}
+
+    def _flush_attachment_links(accession: str) -> None:
+        if not args.attachment_links:
+            return
+        entries = attachment_links.get(accession)
+        if not entries:
+            return
+        attachment_links_dir.mkdir(parents=True, exist_ok=True)
+        path = attachment_links_dir / f"{accession}.json"
+        path.write_text(json.dumps(list(entries.values()), indent=2))
+        attachment_links.pop(accession, None)
+
+    def _ensure_attachment_entry(
+        accession: str,
+        name: str,
+        base_url: str | None,
+        *,
+        explicit_url: str | None = None,
+    ) -> dict[str, object] | None:
+        if not args.attachment_links or not is_attachment_filename(name):
+            return None
+        links = attachment_links.setdefault(accession, {})
+        entry = links.setdefault(name, {"name": name, "downloaded": False})
+        url = explicit_url or (f"{base_url}{name}" if base_url else None)
+        if url:
+            entry["url"] = url
+        return entry
+
+    def _mark_attachment_downloaded(accession: str, name: str, base_url: str, saved: bool) -> None:
+        if not saved:
+            return
+        entry = _ensure_attachment_entry(accession, name, base_url)
+        if entry:
+            entry["downloaded"] = True
+
+    def _record_existing_attachment_links(accession: str) -> None:
+        if not args.attachment_links:
+            return
+        base_url = edgar_db.get_accession_base_url(accession)
+        for stored_name, stored_url in edgar_db.get_accession_files_info(accession):
+            _ensure_attachment_entry(accession, stored_name, base_url, explicit_url=stored_url)
+        _flush_attachment_links(accession)
 
     try:
         fetcher = EdgarSubmissionsFetcher(
@@ -204,6 +255,7 @@ def main() -> None:
                             continue
                         payload = edgar_db.get_file(accession, stored_name)
                         save_attachment(stored_name, payload, attachment_dir)
+                _record_existing_attachment_links(accession)
                 return
 
             try:
@@ -212,6 +264,7 @@ def main() -> None:
                 print(f"Accession fetch failed ({exc.status}): {exc.url}")
                 return
 
+            acc_base_url = acc.base_url
             file_names: list[str] = []
             for item in acc.files:
                 if isinstance(item, dict):
@@ -221,19 +274,25 @@ def main() -> None:
                 if not name or should_skip_accession_file(accession, name):
                     logging.info("skipping %s", name or "<missing name>")
                     continue
+                _ensure_attachment_entry(accession, name, acc_base_url)
                 file_names.append(name)
             filtered_file_names = _filter_out_xml_duplicates(file_names)
-            edgar_db.record_accession_index(result.cik, accession, acc.base_url, filtered_file_names)
+            edgar_db.record_accession_index(result.cik, accession, acc_base_url, filtered_file_names)
 
             stored_lower: set[str] = set()
             future_xml_lower = {name.lower() for name in filtered_file_names if name.lower().endswith(".xml")}
             for name in filtered_file_names:
+                _ensure_attachment_entry(accession, name, acc_base_url)
                 lower = name.lower()
+                skip_attachment_download = is_attachment_filename(name) and args.attachment_links and not args.save_attachments
                 if edgar_db.has_file(accession, name):
                     stored_lower.add(lower)
                     if args.save_attachments:
                         payload = edgar_db.get_file(accession, name)
-                        save_attachment(name, payload, attachment_dir)
+                        saved = save_attachment(name, payload, attachment_dir)
+                        _mark_attachment_downloaded(accession, name, acc_base_url, saved is not None)
+                    continue
+                if skip_attachment_download:
                     continue
                 if _should_skip_non_xml_due_to_xml(name, stored_lower, future_xml_lower):
                     logging.info("skipping %s because %s exists", name, f"{name}.xml")
@@ -248,6 +307,7 @@ def main() -> None:
                     expanded_xml_lower = {entry_name.lower() for entry_name in expanded if entry_name.lower().endswith(".xml")}
                     known_xml_lower = future_xml_lower | expanded_xml_lower
                     for entry_name, entry_payload in expanded.items():
+                        _ensure_attachment_entry(accession, entry_name, acc_base_url)
                         lower_entry = entry_name.lower()
                         if lower_entry in stored_lower:
                             continue
@@ -256,6 +316,8 @@ def main() -> None:
                             continue
                         if edgar_db.has_file(accession, entry_name):
                             stored_lower.add(lower_entry)
+                            continue
+                        if is_attachment_filename(entry_name) and args.attachment_links and not args.save_attachments:
                             continue
                         if entry_name.lower().endswith(".xml"):
                             if debug_dumps:
@@ -269,12 +331,13 @@ def main() -> None:
                             entry_payload = convert_html_to_markdown_bytes(entry_name, entry_payload)
                             if debug_dumps:
                                 _debug_dump(accession, entry_name, entry_payload, "md")
-                        edgar_db.store_file(accession, entry_name, entry_payload)
+                        edgar_db.store_file(accession, entry_name, entry_payload, source_url=f"{acc_base_url}{entry_name}")
                         if args.save_attachments:
-                            save_attachment(entry_name, entry_payload, attachment_dir)
+                            saved = save_attachment(entry_name, entry_payload, attachment_dir)
+                            _mark_attachment_downloaded(accession, entry_name, acc_base_url, saved is not None)
                         stored_lower.add(lower_entry)
-                        # Do not store the raw zip; we keep expanded files only.
-                        continue
+                    # Do not store the raw zip; we keep expanded files only.
+                    continue
                 try:
                     payload = reader.fetch_file(result.cik, accession, name)
                 except PermanentFetchError as file_exc:
@@ -286,16 +349,19 @@ def main() -> None:
                     payload = markdown_textblocks(payload)
                     if debug_dumps:
                         _debug_dump(accession, name, payload, "after")
-                    elif name.lower().endswith((".htm", ".html")):
-                        if debug_dumps:
-                            _debug_dump(accession, name, payload, "before_html")
-                        payload = convert_html_to_markdown_bytes(name, payload)
-                        if debug_dumps:
-                            _debug_dump(accession, name, payload, "md")
-                edgar_db.store_file(accession, name, payload)
+                elif name.lower().endswith((".htm", ".html")):
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "before_html")
+                    payload = convert_html_to_markdown_bytes(name, payload)
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "md")
+                edgar_db.store_file(accession, name, payload, source_url=f"{acc_base_url}{name}")
                 if args.save_attachments:
-                    save_attachment(name, payload, attachment_dir)
+                    saved = save_attachment(name, payload, attachment_dir)
+                    _mark_attachment_downloaded(accession, name, acc_base_url, saved is not None)
                 stored_lower.add(name.lower())
+
+            _flush_attachment_links(accession)
 
         if args.accession:
             print("\nAccession index:")
