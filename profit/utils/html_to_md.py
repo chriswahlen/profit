@@ -1,20 +1,57 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from html.parser import HTMLParser
 from typing import Dict, List
+
+
+@dataclass
+class TableContext:
+    rows: list[list[Dict[str, str]]] = None
+    current_row: list[Dict[str, str]] | None = None
+    current_cell: list[str] | None = None
+    current_cell_attrs: Dict[str, str] | None = None
+
+    def __post_init__(self):
+        if self.rows is None:
+            self.rows = []
+
+
+@dataclass
+class MarkerContext:
+    marker: str
+    saw_text: bool = False
 
 
 class Markdownifier(HTMLParser):
     def __init__(self):
         super().__init__()
         self.parts: list[str] = []
-        self.table_mode = False
-        self.table_rows_data: list[list[Dict[str, str]]] = []
-        self.current_row: list[Dict[str, str]] | None = None
-        self.current_cell: list[str] | None = None
-        self.current_cell_attrs: Dict[str, str] | None = None
+        self.table_stack: list[TableContext] = []
+        self.marker_stack: list[MarkerContext] = []
         self.script_mode = False
+
+    def _push_marker(self, marker: str):
+        self.parts.append(marker)
+        self.marker_stack.append(MarkerContext(marker=marker))
+
+    def _close_marker(self, marker: str):
+        if not self.marker_stack or self.marker_stack[-1].marker != marker:
+            self.parts.append(marker)
+            return
+        ctx = self.marker_stack.pop()
+        if not ctx.saw_text:
+            if self.parts and self.parts[-1] == marker:
+                self.parts.pop()
+            return
+        self.parts.append(marker)
+
+    def _mark_text_seen(self):
+        if not self.marker_stack:
+            return
+        for ctx in self.marker_stack:
+            ctx.saw_text = True
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -23,9 +60,9 @@ class Markdownifier(HTMLParser):
             self.script_mode = True
             return
         if tag in {"b", "strong"}:
-            self.parts.append("**")
+            self._push_marker("**")
         elif tag in {"i", "em", "u"}:
-            self.parts.append("*")
+            self._push_marker("*")
         elif tag == "span":
             self.parts.append(" ")
         elif tag in {"br"}:
@@ -37,14 +74,13 @@ class Markdownifier(HTMLParser):
         elif tag == "li":
             self.parts.append("- ")
         elif tag == "table":
-            self.table_mode = True
-            self.table_rows_data = []
-            self.current_row = None
-        elif tag == "tr" and self.table_mode:
-            self.current_row = []
-        elif tag in {"td", "th"} and self.table_mode:
-            self.current_cell = []
-            self.current_cell_attrs = attrs_map
+            self.table_stack.append(TableContext())
+        elif tag == "tr" and self.table_stack:
+            self.table_stack[-1].current_row = []
+        elif tag in {"td", "th"} and self.table_stack:
+            ctx = self.table_stack[-1]
+            ctx.current_cell = []
+            ctx.current_cell_attrs = attrs_map
 
     def handle_endtag(self, tag):
         tag = tag.lower()
@@ -52,46 +88,46 @@ class Markdownifier(HTMLParser):
             self.script_mode = False
             return
         if tag in {"b", "strong"}:
-            self.parts.append("**")
+            self._close_marker("**")
         elif tag in {"i", "em", "u"}:
-            self.parts.append("*")
+            self._close_marker("*")
         elif tag in {"p", "div"}:
             self.parts.append("\n\n")
         elif tag == "li":
             self.parts.append("\n")
         elif tag == "span":
             self.parts.append(" ")
-        elif tag in {"td", "th"} and self.table_mode:
-            if self.current_row is not None and self.current_cell is not None:
-                text = "".join(self.current_cell).strip()
+        elif tag in {"td", "th"} and self.table_stack:
+            ctx = self.table_stack[-1]
+            if ctx.current_row is not None and ctx.current_cell is not None:
+                text = "".join(ctx.current_cell).strip()
                 cell = {
                     "text": text,
-                    "colspan": int(self.current_cell_attrs.get("colspan", "1")) if self.current_cell_attrs else 1,
-                    "rowspan": int(self.current_cell_attrs.get("rowspan", "1")) if self.current_cell_attrs else 1,
+                    "colspan": int(ctx.current_cell_attrs.get("colspan", "1")) if ctx.current_cell_attrs else 1,
+                    "rowspan": int(ctx.current_cell_attrs.get("rowspan", "1")) if ctx.current_cell_attrs else 1,
                 }
-                self.current_row.append(cell)
-            self.current_cell = None
-            self.current_cell_attrs = None
-        elif tag == "tr" and self.table_mode:
-            if self.current_row is not None:
-                self.table_rows_data.append(self.current_row)
-            self.current_row = None
-        elif tag == "table" and self.table_mode:
-            if self.table_rows_data:
-                table_lines = self._render_table(self.table_rows_data)
+                ctx.current_row.append(cell)
+            ctx.current_cell = None
+            ctx.current_cell_attrs = None
+        elif tag == "tr" and self.table_stack:
+            ctx = self.table_stack[-1]
+            if ctx.current_row is not None:
+                ctx.rows.append(ctx.current_row)
+            ctx.current_row = None
+        elif tag == "table" and self.table_stack:
+            ctx = self.table_stack.pop()
+            if ctx.rows:
+                table_lines = self._render_table(ctx.rows)
                 if table_lines:
                     self.parts.append("\n" + "\n".join(table_lines) + "\n")
-            self.table_mode = False
-            self.table_rows_data = []
-            self.current_row = None
-            self.current_cell = None
-            self.current_cell_attrs = None
 
     def handle_data(self, data):
         if self.script_mode:
             return
-        if self.table_mode and self.current_cell is not None:
-            self.current_cell.append(data)
+        if data.strip():
+            self._mark_text_seen()
+        if self.table_stack and self.table_stack[-1].current_cell is not None:
+            self.table_stack[-1].current_cell.append(data)
         else:
             self.parts.append(data)
 
@@ -138,4 +174,12 @@ def html_to_markdown(html: str) -> str:
     parser = Markdownifier()
     parser.feed(html)
     text = parser.markdown()
-    return re.sub(r"\n{3,}", "\n\n", text)
+    cleaned = re.sub(r"[ \t]+\n", "\n", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    lines = []
+    for line in cleaned.strip().splitlines():
+        stripped = line.strip()
+        if stripped and set(stripped) == {"*"}:
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
