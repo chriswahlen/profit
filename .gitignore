@@ -8,3 +8,5 @@ fake_web
 *.egg-info
 venv/*
 datasets/*
+*.sqlite
+*.sqlite3
