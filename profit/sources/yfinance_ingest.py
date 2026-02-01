@@ -279,35 +279,46 @@ def fetch_and_store_yfinance(
     pending_derived = set(derived_codes)
 
     if catch_up:
-        for inst in resolved:
-            req = YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code)
-            try:
+        window_groups: dict[tuple[datetime, datetime], list[tuple[ResolvedInstrument, YFinanceRequest, int]]] = {}
+        try:
+            for inst in resolved:
                 start_i, end_i, last_ts_us = _catchup_window(stores.columnar, inst.instrument_id, start, now)
-                frames = fetcher.timeseries_fetch_many([req], start_i, end_i)
-            except Exception:
-                for code in list(pending_derived):
-                    stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
-                raise
-            frame = frames[0] if frames else pd.DataFrame()
-            if frame is not None and not frame.empty:
-                last_dt = datetime.fromtimestamp(last_ts_us / 1_000_000, tz=timezone.utc)
-                newest_dt = frame.index.max().to_pydatetime()
-                logger.info(
-                    "yfinance catch-up fetched ticker=%s instrument_id=%s points=%s last_seen=%s newest_point=%s",
-                    inst.provider_code,
-                    inst.instrument_id,
-                    len(frame.index),
-                    last_dt.isoformat(),
-                    newest_dt.isoformat(),
-                )
-            _consume_frame(
-                stores=stores,
-                resolved_inst=inst,
-                frame=frame,
-                start=start_i,
-                dry_run=dry_run,
-                pending_derived=pending_derived,
-            )
+                req = YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code)
+                window_groups.setdefault((start_i, end_i), []).append((inst, req, last_ts_us))
+
+            for (start_i, end_i), group in window_groups.items():
+                requests_group = [g[1] for g in group]
+                try:
+                    frames = fetcher.timeseries_fetch_many(requests_group, start_i, end_i)
+                except Exception:
+                    for code in list(pending_derived):
+                        stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+                    raise
+                for (inst, _req, last_ts_us), frame in zip(group, frames):
+                    if frame is not None and not frame.empty:
+                        last_dt = datetime.fromtimestamp(last_ts_us / 1_000_000, tz=timezone.utc)
+                        newest_dt = frame.index.max().to_pydatetime()
+                        logger.info(
+                            "yfinance catch-up fetched ticker=%s instrument_id=%s points=%s last_seen=%s newest_point=%s",
+                            inst.provider_code,
+                            inst.instrument_id,
+                            len(frame.index),
+                            last_dt.isoformat(),
+                            newest_dt.isoformat(),
+                        )
+                    _consume_frame(
+                        stores=stores,
+                        resolved_inst=inst,
+                        frame=frame,
+                        start=start_i,
+                        dry_run=dry_run,
+                        pending_derived=pending_derived,
+                    )
+        except Exception:
+            # ensure pending derived cleaned on error
+            for code in list(pending_derived):
+                stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+            raise
     else:
         try:
             frames = fetcher.timeseries_fetch_many(requests, start, end)

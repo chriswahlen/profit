@@ -115,6 +115,8 @@ class YFinanceFetcher(BaseFetcher[YFinanceRequest, pd.DataFrame], DiscoverableFe
             max_attempts=max_attempts,
             backoff_factor=backoff_factor,
             max_backoff=max_backoff,
+            max_batch_size=8,
+            batch_pause_s=0.5,
             lifecycle=lifecycle,
             catalog_checker=catalog_checker,
         )
@@ -264,4 +266,3 @@ def _extract_retry_after(exc: Exception) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
-

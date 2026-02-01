@@ -43,6 +43,8 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         retry_exceptions: Tuple[Type[BaseException], ...] = (Exception,),
         sleep_fn: Callable[[float], None] = time.sleep,
         max_batch_size: Optional[int] = None,
+        batch_pause_s: float = 0.0,
+        rate_limit_per_sec: float | None = 5.0,
         lifecycle: LifecycleReader | None = None,
         catalog_checker=None,
         refresh_catalog: bool = False,
@@ -61,6 +63,10 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         self.retry_exceptions = retry_exceptions
         self._sleep = sleep_fn
         self.max_batch_size = max_batch_size
+        self.batch_pause_s = batch_pause_s
+        self._rate_limit_per_sec = rate_limit_per_sec
+        self._allowance = rate_limit_per_sec if rate_limit_per_sec else None
+        self._last_check = time.monotonic()
         if lifecycle is None:
             raise ValueError("lifecycle reader is required")
         self.lifecycle = lifecycle
@@ -255,6 +261,9 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
                         cov.write_points(data)
                     chunks_by_req[req].append(data)
 
+                if self.batch_pause_s and self.batch_pause_s > 0:
+                    self._sleep(self.batch_pause_s)
+
         # Finalize per-request results honoring coverage when available.
         out: list[ResultT | List[ResultT]] = []
         for req in requests:
@@ -337,6 +346,7 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
         while True:
             attempt += 1
             try:
+                self._throttle()
                 return fn()
             except ThrottledError as exc:
                 if attempt >= self.max_attempts:
@@ -356,6 +366,23 @@ class BaseFetcher(Generic[RequestT, ResultT], ABC):
             except Exception:
                 # Do not retry for unexpected exception types.
                 raise
+
+    def _throttle(self) -> None:
+        if not self._rate_limit_per_sec:
+            return
+        now = time.monotonic()
+        elapsed = now - self._last_check
+        self._last_check = now
+        if self._allowance is None:
+            self._allowance = self._rate_limit_per_sec
+        self._allowance = min(self._rate_limit_per_sec, self._allowance + elapsed * self._rate_limit_per_sec)
+        if self._allowance < 1.0:
+            sleep_time = (1.0 - self._allowance) / self._rate_limit_per_sec
+            self._sleep(sleep_time)
+            self._allowance = 0.0
+            self._last_check = time.monotonic()
+        else:
+            self._allowance -= 1.0
 
     @staticmethod
     def _normalize_ts(ts: datetime) -> datetime:

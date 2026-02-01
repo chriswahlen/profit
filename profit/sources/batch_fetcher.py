@@ -30,6 +30,8 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
         max_backoff: float = 5.0,
         lifecycle=None,
         catalog_checker=None,
+        batch_pause_s: float = 0.0,
+        rate_limit_per_sec: float | None = 5.0,
     ) -> None:
         super().__init__(
             cfg=cfg,
@@ -42,6 +44,8 @@ class BatchFetcher(BaseFetcher[RequestT, ResultT]):
             max_backoff=max_backoff,
             lifecycle=lifecycle,
             catalog_checker=catalog_checker,
+            batch_pause_s=batch_pause_s,
+            rate_limit_per_sec=rate_limit_per_sec,
         )
 
     def fetch(self, request: RequestT, *, ttl: Optional[timedelta] = None) -> ResultT:
