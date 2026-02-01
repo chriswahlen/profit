@@ -21,11 +21,11 @@ class StooqWorldHistorySeeder:
     Load historical daily OHLCV for global Stooq symbols into the columnar store.
     """
 
-    DATASET = "stooq_world_bar_ohlcv"
     SEEDER_KEY = "stooq_world_history"
     STEP_US = 86_400_000_000
     WINDOW_POINTS = 1095
     GRID_ORIGIN = datetime(1750, 1, 1, tzinfo=timezone.utc)
+    PROVIDER = "stooq"
 
     def __init__(
         self,
@@ -121,8 +121,8 @@ class StooqWorldHistorySeeder:
             return self._series_cache[key]
         series_id = self.store.get_or_create_series(
             instrument_id=instrument_id,
-            dataset=self.DATASET,
             field=field,
+            provider_id=self.PROVIDER,
             step_us=self.STEP_US,
             grid_origin_ts_us=int(self.GRID_ORIGIN.timestamp() * 1_000_000),
             window_points=self.WINDOW_POINTS,

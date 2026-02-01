@@ -31,7 +31,7 @@ Key ideas:
 
 ### Storage layout
 - Default path: `.cache/profit/columnar.sqlite3` (or `$PROFIT_CACHE_DIR/columnar.sqlite3`).
-- Series metadata table: `__col_series__`
+- Series metadata table: `__col_series__` (includes optional `provider_id` for the source that created/owns each series)
 - Slice table: `__col_slice__` with primary key `(series_id, start_index)`
 
 `start_index` is a grid index relative to the series origin:
@@ -45,7 +45,6 @@ from profit.cache import ColumnarSqliteStore
 store = ColumnarSqliteStore()
 series_id = store.create_series(
     instrument_id="AAPL",
-    dataset="bar_ohlcv",
     field="close",
     step_us=86_400_000_000,  # daily UTC grid
     grid_origin_ts_us=0,     # unix epoch origin

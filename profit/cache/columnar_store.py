@@ -66,8 +66,8 @@ def _us_to_dt(ts_us: int) -> datetime:
 class SeriesConfig:
     series_id: int
     instrument_id: str
-    dataset: str
     field: str
+    provider_id: str | None
     step_us: int
     grid_origin_ts_us: int
     window_points: int
@@ -105,8 +105,8 @@ class ColumnarSqliteStore:
     _CREATE_SERIES_SQL = """
         INSERT INTO __col_series__ (
             instrument_id,
-            dataset,
             field,
+            provider_id,
             step_us,
             grid_origin_ts_us,
             window_points,
@@ -124,8 +124,8 @@ class ColumnarSqliteStore:
         SELECT
             series_id,
             instrument_id,
-            dataset,
             field,
+            provider_id,
             step_us,
             grid_origin_ts_us,
             window_points,
@@ -149,14 +149,14 @@ class ColumnarSqliteStore:
     _SELECT_SERIES_ID_SQL = """
         SELECT series_id
         FROM __col_series__
-        WHERE instrument_id = ? AND dataset = ? AND field = ? AND step_us = ?
+        WHERE instrument_id = ? AND field = ? AND step_us = ?
         """
     _SELECT_ALL_SERIES_SQL = """
         SELECT
             series_id,
             instrument_id,
-            dataset,
             field,
+            provider_id,
             step_us,
             grid_origin_ts_us,
             window_points,
@@ -211,8 +211,8 @@ class ColumnarSqliteStore:
         self,
         *,
         instrument_id: str,
-        dataset: str,
         field: str,
+        provider_id: str | None = None,
         step_us: int,
         grid_origin_ts_us: int,
         window_points: int,
@@ -237,9 +237,8 @@ class ColumnarSqliteStore:
         else:
             sentinel_unfetched_bits = _f64_to_u64(sentinel_unfetched_f64)
         logger.info(
-            "create_series instrument_id=%s dataset=%s field=%s step_us=%s window_points=%s compression=%s offsets=%s checksum=%s",
+            "create_series instrument_id=%s field=%s step_us=%s window_points=%s compression=%s offsets=%s checksum=%s",
             instrument_id,
-            dataset,
             field,
             step_us,
             window_points,
@@ -252,8 +251,8 @@ class ColumnarSqliteStore:
             self._CREATE_SERIES_SQL,
             (
                 instrument_id,
-                dataset,
                 field,
+                provider_id,
                 int(step_us),
                 int(grid_origin_ts_us),
                 int(window_points),
@@ -270,8 +269,8 @@ class ColumnarSqliteStore:
         cfg = SeriesConfig(
             series_id=series_id,
             instrument_id=instrument_id,
-            dataset=dataset,
             field=field,
+            provider_id=provider_id,
             step_us=int(step_us),
             grid_origin_ts_us=int(grid_origin_ts_us),
             window_points=int(window_points),
@@ -309,11 +308,14 @@ class ColumnarSqliteStore:
             high_water_ts_us = int(row[12])
         sentinel_f64 = _u64_to_f64(sentinel_bits)
         sentinel_unfetched_f64 = _u64_to_f64(sentinel_unfetched_bits)
+        provider_id: str | None = None
+        if len(row) > 3 and row[3] is not None:
+            provider_id = str(row[3])
         return SeriesConfig(
             series_id=int(row[0]),
             instrument_id=str(row[1]),
-            dataset=str(row[2]),
-            field=str(row[3]),
+            field=str(row[2]),
+            provider_id=provider_id,
             step_us=int(row[4]),
             grid_origin_ts_us=int(row[5]),
             window_points=int(row[6]),
@@ -344,7 +346,6 @@ class ColumnarSqliteStore:
         self,
         *,
         instrument_id: str,
-        dataset: str,
         field: str,
         step_us: int,
     ) -> int | None:
@@ -356,7 +357,7 @@ class ColumnarSqliteStore:
         cur = self._cursor("select_series_id")
         cur.execute(
             self._SELECT_SERIES_ID_SQL,
-            (instrument_id, dataset, field, int(step_us)),
+            (instrument_id, field, int(step_us)),
         )
         row = cur.fetchone()
         if row is None:
@@ -388,8 +389,8 @@ class ColumnarSqliteStore:
         self,
         *,
         instrument_id: str,
-        dataset: str,
         field: str,
+        provider_id: str | None = None,
         step_us: int,
         grid_origin_ts_us: int,
         window_points: int,
@@ -403,7 +404,6 @@ class ColumnarSqliteStore:
         """
         existing = self.get_series_id(
             instrument_id=instrument_id,
-            dataset=dataset,
             field=field,
             step_us=step_us,
         )
@@ -412,8 +412,8 @@ class ColumnarSqliteStore:
         try:
             return self.create_series(
                 instrument_id=instrument_id,
-                dataset=dataset,
                 field=field,
+                provider_id=provider_id,
                 step_us=step_us,
                 grid_origin_ts_us=grid_origin_ts_us,
                 window_points=window_points,
@@ -426,7 +426,6 @@ class ColumnarSqliteStore:
             # Concurrent process or race: re-read.
             existing2 = self.get_series_id(
                 instrument_id=instrument_id,
-                dataset=dataset,
                 field=field,
                 step_us=step_us,
             )
@@ -734,8 +733,8 @@ class ColumnarSqliteStore:
             CREATE TABLE IF NOT EXISTS __col_series__ (
                 series_id INTEGER PRIMARY KEY,
                 instrument_id TEXT NOT NULL,
-                dataset TEXT NOT NULL,
                 field TEXT NOT NULL,
+                provider_id TEXT,
                 step_us INTEGER NOT NULL,
                 grid_origin_ts_us INTEGER NOT NULL,
                 window_points INTEGER NOT NULL,
@@ -745,7 +744,7 @@ class ColumnarSqliteStore:
                 sentinel_f64_bits INTEGER NOT NULL,
                 sentinel_unfetched_f64_bits INTEGER NOT NULL,
                 high_water_ts_us INTEGER,
-                UNIQUE (instrument_id, dataset, field, step_us)
+                UNIQUE (instrument_id, field, step_us)
             )
             """
         )

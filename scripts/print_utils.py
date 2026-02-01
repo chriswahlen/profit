@@ -19,7 +19,6 @@ def print_points(
     for field in fields:
         series_id = store.get_series_id(
             instrument_id=instrument_id,
-            dataset=dataset,
             field=field,
             step_us=step_us,
         )

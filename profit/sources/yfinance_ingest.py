@@ -20,7 +20,7 @@ from profit.catalog.refresher import CatalogChecker
 from profit.catalog.store import CatalogStore
 from profit.catalog.types import InstrumentRecord
 from profit.config import ProfitConfig
-from profit.sources.yfinance import DATASET, FIELD_ORDER, PROVIDER, YFinanceFetcher, YFinanceRequest
+from profit.sources.yfinance import FIELD_ORDER, PROVIDER, YFinanceFetcher, YFinanceRequest
 from profit.stores.container import StoreContainer
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,8 @@ class _NoopCatalogChecker:
 def _series_id(store: ColumnarSqliteStore, instrument_id: str, field: str) -> int:
     return store.get_or_create_series(
         instrument_id=instrument_id,
-        dataset=DATASET,
         field=field,
+        provider_id=PROVIDER,
         step_us=STEP_US,
         grid_origin_ts_us=GRID_ORIGIN_US,
         window_points=WINDOW_POINTS,

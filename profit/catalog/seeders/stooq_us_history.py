@@ -23,11 +23,11 @@ class StooqUsHistorySeeder:
     into the columnar store (`ColumnarSqliteStore`) as fixed-step series per field.
     """
 
-    DATASET = "stooq_bar_ohlcv"
     SEEDER_KEY = "stooq_us_history"
     STEP_US = 86_400_000_000  # daily
     WINDOW_POINTS = 1095      # 3 years per slice
     GRID_ORIGIN = datetime(1900, 1, 1, tzinfo=timezone.utc)
+    PROVIDER = "stooq"
 
     def __init__(
         self,
@@ -136,8 +136,8 @@ class StooqUsHistorySeeder:
             return self._series_cache[key]
         series_id = self.store.get_or_create_series(
             instrument_id=instrument_id,
-            dataset=self.DATASET,
             field=field,
+            provider_id=self.PROVIDER,
             step_us=self.STEP_US,
             grid_origin_ts_us=int(self.GRID_ORIGIN.timestamp() * 1_000_000),
             window_points=self.WINDOW_POINTS,

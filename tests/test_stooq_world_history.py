@@ -36,7 +36,6 @@ def test_stooq_world_history_seeder(tmp_path: Path):
 
     series_id = col_store.get_series_id(
         instrument_id="XNAS|AAPL",
-        dataset="stooq_world_bar_ohlcv",
         field="close",
         step_us=86_400_000_000,
     )

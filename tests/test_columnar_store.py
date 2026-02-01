@@ -24,7 +24,6 @@ def test_write_creates_and_overwrites_canonical_windows(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,  # unix epoch
@@ -65,7 +64,6 @@ def test_offsets_capture_actual_timestamp(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -87,7 +85,6 @@ def test_write_before_origin_raises(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=DAY_US,  # origin is 1970-01-02
@@ -102,7 +99,6 @@ def test_explicit_overwrite_same_slice(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -120,7 +116,6 @@ def test_offset_requires_millisecond_alignment(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -137,7 +132,6 @@ def test_alignment_guard_on_read_slice(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -154,7 +148,6 @@ def test_checksum_catches_corruption(tmp_path):
     store = ColumnarSqliteStore(db_path)
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -180,7 +173,6 @@ def test_multi_slice_range_and_trimming(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -211,7 +203,6 @@ def test_sentinel_filtering_skips_only_sentinel(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -235,7 +226,6 @@ def test_offsets_bounds(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -255,7 +245,6 @@ def test_checksum_toggle(tmp_path):
     strict = ColumnarSqliteStore(db_path)
     sid = strict.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -277,7 +266,6 @@ def test_checksum_toggle(tmp_path):
     lax = ColumnarSqliteStore(db_path)
     sid2 = lax.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -308,7 +296,6 @@ def test_reopen_and_read(tmp_path):
     store = ColumnarSqliteStore(db_path)
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -327,7 +314,6 @@ def test_window_size_edges(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -340,7 +326,6 @@ def test_window_size_edges(tmp_path):
 
     sid_big = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -356,7 +341,6 @@ def test_empty_write_noop(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -371,7 +355,6 @@ def test_read_empty_range_returns_empty(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -390,7 +373,6 @@ def test_large_range_count(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -412,7 +394,6 @@ def test_non_zero_origin_indexing(tmp_path):
     origin = DAY_US * 10  # origin at day 10
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=origin,
@@ -433,7 +414,6 @@ def test_non_daily_step(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=hour_us,
         grid_origin_ts_us=0,
@@ -450,7 +430,6 @@ def test_offset_and_compression_roundtrip(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -468,7 +447,6 @@ def test_sentinel_overwrite_multi_point(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -499,7 +477,6 @@ def test_index_overflow_guard(monkeypatch, tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -520,7 +497,6 @@ def test_mixed_compression_coexistence(tmp_path):
     store = ColumnarSqliteStore(db_path)
     sid_plain = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -529,7 +505,6 @@ def test_mixed_compression_coexistence(tmp_path):
     )
     sid_zlib = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -547,7 +522,6 @@ def test_boundary_aligned_writes(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -564,7 +538,6 @@ def test_offsets_with_sentinel_filtering(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -589,7 +562,6 @@ def test_offsets_overflow_guard(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -607,7 +579,6 @@ def test_schema_invariants_on_create(tmp_path):
     with pytest.raises(ValueError):
         store.create_series(
             instrument_id="AAPL",
-            dataset="bar_ohlcv",
             field="close",
             step_us=0,  # invalid
             grid_origin_ts_us=0,
@@ -616,7 +587,6 @@ def test_schema_invariants_on_create(tmp_path):
     with pytest.raises(ValueError):
         store.create_series(
             instrument_id="AAPL",
-            dataset="bar_ohlcv",
             field="close",
             step_us=DAY_US,
             grid_origin_ts_us=0,
@@ -625,7 +595,6 @@ def test_schema_invariants_on_create(tmp_path):
     with pytest.raises(ValueError):
         store.create_series(
             instrument_id="AAPL",
-            dataset="bar_ohlcv",
             field="close",
             step_us=DAY_US,
             grid_origin_ts_us=0,
@@ -638,7 +607,6 @@ def test_gap_in_range_does_not_emit_points(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -663,7 +631,6 @@ def test_concurrent_writers_same_db(tmp_path):
     store2 = ColumnarSqliteStore(db_path)
     sid = store1.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -679,7 +646,6 @@ def test_unique_series_constraint(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -688,7 +654,6 @@ def test_unique_series_constraint(tmp_path):
     with pytest.raises(sqlite3.IntegrityError):
         store.create_series(
             instrument_id="AAPL",
-            dataset="bar_ohlcv",
             field="close",
             step_us=DAY_US,
             grid_origin_ts_us=0,
@@ -700,7 +665,6 @@ def test_offsets_negative_roundtrip(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -718,7 +682,6 @@ def test_checksum_catches_offset_corruption(tmp_path):
     store = ColumnarSqliteStore(db_path)
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -745,7 +708,6 @@ def test_large_window_with_compression(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -761,7 +723,6 @@ def test_cross_series_isolation(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid1 = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -769,7 +730,6 @@ def test_cross_series_isolation(tmp_path):
     )
     sid2 = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -786,7 +746,6 @@ def test_checksum_disabled_truncated_blob_raises_decode(tmp_path):
     store = ColumnarSqliteStore(db_path)
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -809,7 +768,6 @@ def test_high_water_mark_roundtrip(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -833,7 +791,6 @@ def test_include_sentinel_true_with_nan(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -849,7 +806,6 @@ def test_get_series_id_missing_returns_none(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.get_series_id(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
     )
@@ -860,7 +816,6 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     existing = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -873,7 +828,6 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "create_series", _fail)
     sid = store.get_or_create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -882,11 +836,24 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     assert sid == existing
 
 
+def test_create_series_records_provider_id(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    series_id = store.create_series(
+        instrument_id="AAPL",
+        field="close",
+        provider_id="stooq",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    cur = store._conn.execute("SELECT provider_id FROM __col_series__ WHERE series_id=?", (series_id,))
+    assert cur.fetchone()[0] == "stooq"
+
+
 def test_mark_range_fetched_and_completeness(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -906,7 +873,6 @@ def test_unfetched_vs_fetched_empty_range(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -933,7 +899,6 @@ def test_mixed_slice_unfetched_and_written(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -962,7 +927,6 @@ def test_partial_slices_and_unrelated_slices(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -998,7 +962,6 @@ def test_get_unfetched_ranges(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1020,7 +983,6 @@ def test_mark_fetched_preserves_written_values(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1040,7 +1002,6 @@ def test_get_unfetched_ranges_idempotent_after_mark(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1060,7 +1021,6 @@ def test_get_unfetched_ranges_on_empty_series(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1078,7 +1038,6 @@ def test_mark_partial_window_on_empty_series(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="MSFT",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1105,7 +1064,6 @@ def test_write_after_mark_fetched_keeps_complete(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1127,7 +1085,6 @@ def test_offsets_enabled_empty_series(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="EURUSD",
-        dataset="fx_rate",
         field="rate",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1149,7 +1106,6 @@ def test_non_daily_step_empty_series(tmp_path):
     hour_us = 3_600_000_000
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=hour_us,
         grid_origin_ts_us=0,
@@ -1169,7 +1125,6 @@ def test_batched_reads_see_pending(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3", pending_limit=16)
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1193,7 +1148,6 @@ def test_batched_overwrite(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="GOOG",
-        dataset="bar",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1211,7 +1165,6 @@ def test_close_flushes_pending(tmp_path):
     store = ColumnarSqliteStore(path)
     sid = store.create_series(
         instrument_id="IBM",
-        dataset="bar",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1234,7 +1187,6 @@ def test_pending_dedup_option(tmp_path):
     )
     sid = store.create_series(
         instrument_id="DUP",
-        dataset="bar",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1253,7 +1205,6 @@ def test_other_connection_sees_old_unflushed(tmp_path):
     writer = ColumnarSqliteStore(path, pending_limit=16)
     sid = writer.create_series(
         instrument_id="TSLA",
-        dataset="bar",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1284,7 +1235,6 @@ def test_sparse_mark_leaves_holes(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1307,7 +1257,6 @@ def test_get_unfetched_ranges_multiple_slices(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1344,7 +1293,6 @@ def test_drop_series_removes_slices(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1362,7 +1310,6 @@ def test_corrupt_offsets_checksum(tmp_path):
     store = ColumnarSqliteStore(db_path)
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
@@ -1392,7 +1339,6 @@ def test_error_messages_stable(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     sid = store.create_series(
         instrument_id="AAPL",
-        dataset="bar_ohlcv",
         field="close",
         step_us=DAY_US,
         grid_origin_ts_us=0,
