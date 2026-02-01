@@ -83,6 +83,20 @@ def test_html_to_markdown_trims_redundant_newlines():
     assert "\n\n\n" not in md
 
 
+def test_html_to_markdown_span_adds_spaces():
+    html = "<p>Value:<span>123</span>USD</p>"
+    md = html_to_markdown(html)
+    assert "Value:" in md
+    assert "123 USD" in md
+
+
+def test_html_to_markdown_div_adds_newlines():
+    html = "<div>First</div><div>Second</div>"
+    md = html_to_markdown(html)
+    assert "First" in md and "Second" in md
+    assert md.count("\n") >= 2
+
+
 def test_html_to_markdown_removes_script_blocks():
     html = "<p>Safe</p><script>console.log('x');</script><p>After</p>"
     md = html_to_markdown(html)

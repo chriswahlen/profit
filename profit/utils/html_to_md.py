@@ -26,6 +26,8 @@ class Markdownifier(HTMLParser):
             self.parts.append("**")
         elif tag in {"i", "em", "u"}:
             self.parts.append("*")
+        elif tag == "span":
+            self.parts.append(" ")
         elif tag in {"br"}:
             self.parts.append("\n")
         elif tag in {"p", "div"}:
@@ -57,6 +59,8 @@ class Markdownifier(HTMLParser):
             self.parts.append("\n\n")
         elif tag == "li":
             self.parts.append("\n")
+        elif tag == "span":
+            self.parts.append(" ")
         elif tag in {"td", "th"} and self.table_mode:
             if self.current_row is not None and self.current_cell is not None:
                 text = "".join(self.current_cell).strip()
