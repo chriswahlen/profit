@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, TextIO
 
 import csv
 from datetime import datetime, timezone
@@ -94,6 +94,42 @@ def iterate_stooq_rows(txt: Path) -> Iterable[dict]:
         yield from _iter_with_pandas(txt)
     else:
         yield from _iter_with_csv(txt)
+
+
+def iterate_stooq_rows_file(handle: TextIO, name: str = "") -> Iterable[dict]:
+    """
+    Parse Stooq CSV rows from an already-open text handle (e.g., inside a zip).
+    """
+    reader = csv.reader(handle)
+    next(reader, None)
+    for row in reader:
+        if len(row) < 9:
+            continue
+        per = row[1]
+        if per != "D":
+            continue
+        date_obj = _parse_date(row[2])
+        if date_obj is None:
+            continue
+        try:
+            open_val = float(row[4])
+            high_val = float(row[5])
+            low_val = float(row[6])
+            close_val = float(row[7])
+            vol_val = float(row[8])
+            openint_val = float(row[9]) if len(row) > 9 and row[9] else 0.0
+        except ValueError:
+            continue
+        yield {
+            "ticker": row[0].upper(),
+            "date": date_obj,
+            "open": open_val,
+            "high": high_val,
+            "low": low_val,
+            "close": close_val,
+            "volume": vol_val,
+            "openint": openint_val,
+        }
 
 
 def _iter_with_csv(txt: Path) -> Iterable[dict]:

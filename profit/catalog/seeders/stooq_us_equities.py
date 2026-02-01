@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -48,9 +49,9 @@ class StooqUsEquitySeeder:
         self.ttl = ttl
 
     def seed(self) -> SeedResult:
-        base = self._find_base_path()
-        if base is None:
-            logging.warning("Stooq US dataset base path missing under %s", self.data_root)
+        zip_path = self._find_zip_path()
+        if zip_path is None:
+            logging.warning("Stooq US dataset zip missing; expected one of: %s", ", ".join(map(str, self._zip_candidates())))
             return SeedResult(instruments_written=0)
 
         ensure_seed_metadata(self.store.conn)
@@ -65,9 +66,9 @@ class StooqUsEquitySeeder:
             )
             return SeedResult(instruments_written=0)
 
-        instruments = list(self._discover_instruments(base))
+        instruments = list(self._discover_instruments(zip_path))
         if not instruments:
-            logging.info("Stooq US seeder found no instruments under %s", base)
+            logging.info("Stooq US seeder found no instruments in %s", zip_path)
             return SeedResult(instruments_written=0)
 
         written = self.store.upsert_instruments(instruments)
@@ -76,54 +77,59 @@ class StooqUsEquitySeeder:
         return SeedResult(instruments_written=written)
 
     # ------------------------------------------------------------------
-    def _discover_instruments(self, base: Path) -> Iterable[InstrumentRecord]:
-        for txt in base.rglob("*.txt"):
-            relative = txt.relative_to(base)
-            # expected: us/<venue> <kind>/<bucket>/TICKER.us.txt
-            parts = [p.lower() for p in relative.parts]
-            if len(parts) < 2:
-                continue
-            venue_and_kind = parts[0]  # e.g., "nyse stocks"
-            venue_tokens = venue_and_kind.split()
-            venue = venue_tokens[0]
-            kind = venue_tokens[1] if len(venue_tokens) > 1 else "stocks"
-            ticker = txt.stem.upper()  # includes .US
+    def _discover_instruments(self, zip_path: Path) -> Iterable[InstrumentRecord]:
+        with zipfile.ZipFile(zip_path) as zf:
+            for info in zf.infolist():
+                if not info.filename.lower().endswith(".txt"):
+                    continue
+                # expected: data/daily/us/<venue> <kind>/<bucket>/TICKER.us.txt
+                parts = Path(info.filename).parts
+                if len(parts) < 6:
+                    continue
+                rel_parts = parts[3:]  # drop data/daily/us
+                venue_and_kind = rel_parts[0].lower()
+                venue_tokens = venue_and_kind.split()
+                venue = venue_tokens[0]
+                kind = venue_tokens[1] if len(venue_tokens) > 1 else "stocks"
+                ticker = Path(info.filename).stem.upper()  # includes .US
 
-            mic = self.MIC_BY_FOLDER.get(venue, "")
-            instrument_type = self.TYPE_BY_FOLDER.get(kind, "equity")
+                mic = self.MIC_BY_FOLDER.get(venue, "")
+                instrument_type = self.TYPE_BY_FOLDER.get(kind, "equity")
 
-            # canonical id: <MIC>|<TICKER> without .US suffix
-            base_ticker = ticker.split(".", 1)[0]
-            instrument_id = f"{mic or 'STOOQ'}|{base_ticker}"
+                # canonical id: <MIC>|<TICKER> without .US suffix
+                base_ticker = ticker.split(".", 1)[0]
+                instrument_id = f"{mic or 'STOOQ'}|{base_ticker}"
 
-            attrs = {
-                "category": "/".join(parts[:-1]),
-                "path": str(txt),
-                "venue": venue,
-                "kind": kind,
-            }
+                attrs = {
+                    "category": "/".join(rel_parts[:-1]),
+                    "path": info.filename,
+                    "venue": venue,
+                    "kind": kind,
+                }
 
-            yield InstrumentRecord(
-                instrument_id=instrument_id,
-                instrument_type=instrument_type,
-                provider=self.provider,
-                provider_code=ticker,
-                mic=mic,
-                currency="USD",
-                active_from=None,
-                active_to=None,
-                attrs=attrs,
-            )
+                yield InstrumentRecord(
+                    instrument_id=instrument_id,
+                    instrument_type=instrument_type,
+                    provider=self.provider,
+                    provider_code=ticker,
+                    mic=mic,
+                    currency="USD",
+                    active_from=None,
+                    active_to=None,
+                    attrs=attrs,
+                )
 
-    def _find_base_path(self) -> Path | None:
-        candidates = [
-            self.data_root / "market" / "d_us_txt" / "data" / "daily" / "us",
-            self.data_root / "datasets" / "market" / "d_us_txt" / "data" / "daily" / "us",
-        ]
-        for candidate in candidates:
+    def _find_zip_path(self) -> Path | None:
+        for candidate in self._zip_candidates():
             if candidate.exists():
                 return candidate
         return None
+
+    def _zip_candidates(self) -> list[Path]:
+        return [
+            self.data_root / "datasets" / "stooq" / "d_us_txt.zip",
+            self.data_root / "stooq" / "d_us_txt.zip",
+        ]
 
     def _should_skip(self) -> bool:
         last = read_seed_metadata(self.store.conn, "stooq_us")

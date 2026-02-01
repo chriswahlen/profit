@@ -6,28 +6,17 @@ from profit.catalog.seeders import StooqWorldHistorySeeder
 
 
 def test_stooq_world_history_seeder(tmp_path: Path):
-    base = (
-        tmp_path
-        / "datasets"
-        / "market"
-        / "d_world_txt"
-        / "data"
-        / "daily"
-        / "world"
-        / "stooq stocks indices"
-        / "1"
-    )
-    base.mkdir(parents=True)
-    sample = base / "aapl.us.txt"
-    sample.write_text(
-        "\n".join(
-            [
-                "<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>",
-                "AAPL.US,D,20240102,000000,100,110,90,105,9999,0",
-            ]
-        )
-        + "\n"
-    )
+    zip_path = tmp_path / "datasets" / "stooq" / "d_world_txt.zip"
+    zip_path.parent.mkdir(parents=True)
+    import zipfile
+    content = "\n".join(
+        [
+            "<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>",
+            "AAPL.US,D,20240102,000000,100,110,90,105,9999,0",
+        ]
+    ) + "\n"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("data/daily/world/stooq stocks indices/1/aapl.us.txt", content)
 
     col_store = ColumnarSqliteStore(tmp_path / "profit.sqlite")
     seeder = StooqWorldHistorySeeder(store=col_store, data_root=tmp_path, force=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,9 +43,9 @@ class StooqDailySeeder:
         self.ttl = ttl
 
     def seed(self) -> SeedResult:
-        base = self._find_base_path()
-        if base is None:
-            logging.warning("Stooq dataset base path missing under %s", self.data_root)
+        zip_path = self._find_zip_path()
+        if zip_path is None:
+            logging.warning("Stooq dataset zip missing; expected one of: %s", ", ".join(map(str, self._zip_candidates())))
             return SeedResult(instruments_written=0)
 
         ensure_seed_metadata(self.store.conn)
@@ -59,9 +60,9 @@ class StooqDailySeeder:
             )
             return SeedResult(instruments_written=0)
 
-        instruments = list(self._discover_instruments(base))
+        instruments = list(self._discover_instruments(zip_path))
         if not instruments:
-            logging.info("Stooq seeder found no instruments under %s", base)
+            logging.info("Stooq seeder found no instruments in %s", zip_path)
             return SeedResult(instruments_written=0)
 
         written = self.store.upsert_instruments(instruments)
@@ -69,37 +70,45 @@ class StooqDailySeeder:
         self._bump_metadata()
         return SeedResult(instruments_written=written)
 
-    def _discover_instruments(self, base: Path) -> Iterable[InstrumentRecord]:
-        for txt in base.rglob("*.txt"):
-            relative = txt.relative_to(base)
-            parts = [p.lower() for p in relative.parts[:-1]]
-            category = "/".join(parts) if parts else "unknown"
-            ticker = txt.stem.upper()
-            instrument_id = canonical_instrument_id(ticker, parts)
-            instrument_type = guess_type(parts, ticker)
-            attrs = {"category": category, "path": str(txt)}
+    def _discover_instruments(self, zip_path: Path) -> Iterable[InstrumentRecord]:
+        with zipfile.ZipFile(zip_path) as zf:
+            for info in zf.infolist():
+                if not info.filename.lower().endswith(".txt"):
+                    continue
+                # expected: data/daily/<...>/ticker.txt
+                parts = Path(info.filename).parts
+                if len(parts) < 4:
+                    continue
+                rel_parts = [p.lower() for p in parts[2:-1]]  # keep from <region>/<...>
+                category = "/".join(rel_parts) if rel_parts else "unknown"
+                ticker = Path(info.filename).stem.upper()
+                instrument_id = canonical_instrument_id(ticker, rel_parts)
+                instrument_type = guess_type(rel_parts, ticker)
+                attrs = {"category": category, "path": info.filename}
 
-            yield InstrumentRecord(
-                instrument_id=instrument_id,
-                instrument_type=instrument_type,
-                provider=self.provider,
-                provider_code=ticker,
-                mic=exchange_for_ticker(ticker, parts),
-                currency=None,
-                active_from=None,
-                active_to=None,
-                attrs=attrs,
-            )
+                yield InstrumentRecord(
+                    instrument_id=instrument_id,
+                    instrument_type=instrument_type,
+                    provider=self.provider,
+                    provider_code=ticker,
+                    mic=exchange_for_ticker(ticker, rel_parts),
+                    currency=None,
+                    active_from=None,
+                    active_to=None,
+                    attrs=attrs,
+                )
 
-    def _find_base_path(self) -> Path | None:
-        candidates = [
-            self.data_root / "market" / "d_world_txt" / "data" / "daily",
-            self.data_root / "datasets" / "market" / "d_world_txt" / "data" / "daily",
-        ]
-        for candidate in candidates:
+    def _find_zip_path(self) -> Path | None:
+        for candidate in self._zip_candidates():
             if candidate.exists():
                 return candidate
         return None
+
+    def _zip_candidates(self) -> list[Path]:
+        return [
+            self.data_root / "datasets" / "stooq" / "d_world_txt.zip",
+            self.data_root / "stooq" / "d_world_txt.zip",
+        ]
 
     def _should_skip(self) -> bool:
         last = read_seed_metadata(self.store.conn, "stooq_daily")

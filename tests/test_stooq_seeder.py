@@ -9,9 +9,11 @@ from profit.catalog.store import CatalogStore
 def test_stooq_seeder_registers_instrument(tmp_path):
     catalog = CatalogStore(tmp_path / "catalog.sqlite3")
 
-    sample = tmp_path / "market" / "d_world_txt" / "data" / "daily" / "world" / "currencies" / "major"
-    sample.mkdir(parents=True)
-    (sample / "usd.txt").write_text("<TICKER>\n")
+    zip_path = tmp_path / "datasets" / "stooq" / "d_world_txt.zip"
+    zip_path.parent.mkdir(parents=True)
+    import zipfile
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("data/daily/world/currencies/major/usd.txt", "<TICKER>\n")
 
     seeder = StooqDailySeeder(store=catalog, data_root=tmp_path, force=True)
     result = seeder.seed()

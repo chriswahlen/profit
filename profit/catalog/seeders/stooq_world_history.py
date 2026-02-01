@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from io import TextIOWrapper
 from pathlib import Path
 from typing import Iterable
 
 from profit.cache.columnar_store import ColumnarSqliteStore
-from profit.catalog.seeders.stooq_common import canonical_instrument_id, iterate_stooq_rows
+from profit.catalog.seeders.stooq_common import canonical_instrument_id, iterate_stooq_rows_file
 from profit.seed_metadata import ensure_seed_metadata, read_seed_metadata, write_seed_metadata
 
 
@@ -43,9 +45,9 @@ class StooqWorldHistorySeeder:
         self._series_high_water: dict[int, int | None] = {}
 
     def seed(self) -> SeedResult:
-        base = self._find_base_path()
-        if base is None:
-            logging.warning("Stooq world history base path missing under %s", self.data_root)
+        zip_path = self._find_zip_path()
+        if zip_path is None:
+            logging.warning("Stooq world history zip missing; expected one of: %s", ", ".join(self._zip_candidates()))
             return SeedResult(rows_written=0)
 
         ensure_seed_metadata(self.store._conn)
@@ -60,56 +62,57 @@ class StooqWorldHistorySeeder:
             )
             return SeedResult(rows_written=0)
 
-        written = self._ingest(base)
+        written = self._ingest(zip_path)
         self._bump_metadata()
         logging.info("Stooq world history wrote rows=%s", written)
         return SeedResult(rows_written=written)
 
-    def _ingest(self, base: Path) -> int:
+    def _ingest(self, zip_path: Path) -> int:
         total_points = 0
         buffers: dict[int, list[tuple[datetime, float]]] = {}
         max_written: dict[int, int] = {}
-        files = list(base.rglob("*.txt"))
-        self._precreate_series(files, base)
+        with zipfile.ZipFile(zip_path) as zf:
+            txt_members = [zi for zi in zf.infolist() if zi.filename.lower().endswith(".txt")]
 
-        def flush() -> None:
-            nonlocal total_points
-            for series_id, pts in list(buffers.items()):
-                if not pts:
-                    continue
-                self.store.write(series_id, pts)
-                total_points += len(pts)
-            buffers.clear()
-
-        for txt in files:
-            logging.info("Stooq world history reading file %s", txt)
-            relative = txt.relative_to(base)
-            parts = [p.lower() for p in relative.parts[:-1]]
-            for record in iterate_stooq_rows(txt):
-                ts = record["date"]
-                ts_us = int(ts.timestamp() * 1_000_000)
-                instrument_id = canonical_instrument_id(record["ticker"], parts)
-                data = {
-                    "open": record["open"],
-                    "high": record["high"],
-                    "low": record["low"],
-                    "close": record["close"],
-                    "volume": record["volume"],
-                    "openint": record["openint"],
-                }
-                for field, value in data.items():
-                    sid = self._series_id(instrument_id, field)
-                    high = self._series_high_water.get(sid)
-                    if high is not None and ts_us <= high:
+            def flush() -> None:
+                nonlocal total_points
+                for series_id, pts in list(buffers.items()):
+                    if not pts:
                         continue
-                    buffers.setdefault(sid, []).append((ts, value))
-                    prev = max_written.get(sid)
-                    if prev is None or ts_us > prev:
-                        max_written[sid] = ts_us
-                if sum(len(v) for v in buffers.values()) >= 50_000:
-                    flush()
+                    self.store.write(series_id, pts)
+                    total_points += len(pts)
+                buffers.clear()
 
-        flush()
+            for member in txt_members:
+                logging.info("Stooq world history reading file %s", member.filename)
+                relative = Path(member.filename).parts[3:]  # drop data/daily/world
+                parts = [p.lower() for p in relative[:-1]]
+                with zf.open(member, "r") as fh:
+                    for record in iterate_stooq_rows_file(TextIOWrapper(fh, encoding="utf-8"), member.filename):
+                        ts = record["date"]
+                        ts_us = int(ts.timestamp() * 1_000_000)
+                        instrument_id = canonical_instrument_id(record["ticker"], parts)
+                        data = {
+                            "open": record["open"],
+                            "high": record["high"],
+                            "low": record["low"],
+                            "close": record["close"],
+                            "volume": record["volume"],
+                            "openint": record["openint"],
+                        }
+                        for field, value in data.items():
+                            sid = self._series_id(instrument_id, field)
+                            high = self._series_high_water.get(sid)
+                            if high is not None and ts_us <= high:
+                                continue
+                            buffers.setdefault(sid, []).append((ts, value))
+                            prev = max_written.get(sid)
+                            if prev is None or ts_us > prev:
+                                max_written[sid] = ts_us
+                        if sum(len(v) for v in buffers.values()) >= 50_000:
+                            flush()
+
+            flush()
         for sid, ts_us in max_written.items():
             self.store.bump_high_water_ts_us(sid, ts_us)
             self._series_high_water[sid] = ts_us
@@ -136,31 +139,17 @@ class StooqWorldHistorySeeder:
             self._series_high_water[series_id] = self.store.get_high_water_ts_us(series_id)
         return series_id
 
-    def _find_base_path(self) -> Path | None:
-        candidates = [
-            self.data_root / "market" / "d_world_txt" / "data" / "daily" / "world",
-            self.data_root
-            / "datasets"
-            / "market"
-            / "d_world_txt"
-            / "data"
-            / "daily"
-            / "world",
-        ]
-        for candidate in candidates:
+    def _find_zip_path(self) -> Path | None:
+        for candidate in self._zip_candidates():
             if candidate.exists():
                 return candidate
         return None
 
-    def _precreate_series(self, files: list[Path], base: Path) -> None:
-        fields = ("open", "high", "low", "close", "volume", "openint")
-        for txt in files:
-            relative = txt.relative_to(base)
-            parts = [p.lower() for p in relative.parts[:-1]]
-            ticker = txt.stem.upper()
-            instrument_id = canonical_instrument_id(ticker, parts)
-            for field in fields:
-                self._series_id(instrument_id, field)
+    def _zip_candidates(self) -> list[Path]:
+        return [
+            self.data_root / "datasets" / "stooq" / "d_world_txt.zip",
+            self.data_root / "stooq" / "d_world_txt.zip",
+        ]
 
     def _should_skip(self) -> bool:
         last = read_seed_metadata(self.store._conn, self.SEEDER_KEY)

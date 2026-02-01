@@ -9,19 +9,11 @@ from profit.catalog.store import CatalogStore
 def test_stooq_us_seeder_registers_instrument(tmp_path: Path):
     catalog = CatalogStore(tmp_path / "catalog.sqlite3")
 
-    sample = (
-        tmp_path
-        / "datasets"
-        / "market"
-        / "d_us_txt"
-        / "data"
-        / "daily"
-        / "us"
-        / "nyse stocks"
-        / "1"
-    )
-    sample.mkdir(parents=True)
-    (sample / "abc.us.txt").write_text("<TICKER>\n")
+    zip_path = tmp_path / "datasets" / "stooq" / "d_us_txt.zip"
+    zip_path.parent.mkdir(parents=True)
+    import zipfile
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("data/daily/us/nyse stocks/1/abc.us.txt", "<TICKER>\n")
 
     seeder = StooqUsEquitySeeder(store=catalog, data_root=tmp_path, force=True)
     result = seeder.seed()
