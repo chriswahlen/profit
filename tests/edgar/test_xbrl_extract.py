@@ -24,18 +24,19 @@ def test_extract_finance_facts_basic():
         accession="0000000001-25-000001",
         entity_id="ent1",
         provider_id=SEC_PROVIDER_ID,
+        provider_entity_id="0000000001",
+        report_id="10-K",
         source_file="a.xml",
         source_url="http://example/a.xml",
         asof=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        provider_entity_id="0000000001",
     )
 
     assert len(facts) == 1
     fact = facts[0]
+    assert fact.report_id == "10-K"
     assert fact.report_key == "Assets"
     assert fact.units == "USD"
     assert fact.period_end.year == 2025
     assert fact.value == 12345.0
     assert fact.attrs["context_period_type"] == "instant"
     assert fact.attrs["source_file"] == "a.xml"
-

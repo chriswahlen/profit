@@ -57,6 +57,31 @@ def _load_source_url(db: EdgarDatabase, accession: str) -> dict[str, str | None]
     return {name: url for name, url in info}
 
 
+def _lookup_form(db: EdgarDatabase, cik: str, accession: str) -> str:
+    """Best-effort form lookup from stored submissions payload."""
+    cur = db.conn.execute("SELECT payload FROM edgar_submissions WHERE cik = ? LIMIT 1", (normalize_cik(cik),))
+    row = cur.fetchone()
+    if not row:
+        return "UNKNOWN"
+    try:
+        import json
+
+        data = json.loads(row["payload"])
+    except Exception:
+        return "UNKNOWN"
+    filings = data.get("filings") or {}
+    recent = filings.get("recent") or {}
+    accessions = recent.get("accessionNumber") or []
+    forms = recent.get("form") or []
+    norm_target = normalize_accession(accession)
+    for idx, acc in enumerate(accessions):
+        norm_acc = normalize_accession(acc)
+        if norm_acc == norm_target:
+            if idx < len(forms):
+                return forms[idx] or "UNKNOWN"
+    return "UNKNOWN"
+
+
 def _process_accession(
     *,
     accession: str,
@@ -72,6 +97,7 @@ def _process_accession(
         logging.warning("missing entity for cik=%s; skip accession=%s", provider_entity_id, accession)
         return 0
 
+    report_id = _lookup_form(db, provider_entity_id, accession)
     name_to_url = _load_source_url(db, accession)
     filenames = db.get_accession_files(accession)
     written = 0
@@ -92,10 +118,11 @@ def _process_accession(
                 accession=normalize_accession(accession),
                 entity_id=entity_id,
                 provider_id=SEC_PROVIDER_ID,
+                provider_entity_id=provider_entity_id,
+                report_id=report_id,
                 source_file=name,
                 source_url=name_to_url.get(name),
                 asof=asof,
-                provider_entity_id=provider_entity_id,
             )
         )
 

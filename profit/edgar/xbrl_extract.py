@@ -119,14 +119,15 @@ def extract_finance_facts(
     accession: str,
     entity_id: str,
     provider_id: str,
+    provider_entity_id: str,
+    report_id: str,
     source_file: str,
     source_url: str | None,
     asof: datetime,
-    provider_entity_id: str,
 ) -> list[FinanceFactRecord]:
     """Transform an XBRL instance into FinanceFactRecord rows.
 
-    - ``report_id`` is the XBRL filename.
+    - ``report_id`` is the form type (e.g., 10-K, 10-Q, 8-K).
     - ``report_key`` is the local tag name; namespace URI is captured in attrs.
     """
 
@@ -167,7 +168,7 @@ def extract_finance_facts(
             provider_id=provider_id,
             provider_entity_id=provider_entity_id,
             record_id=accession,
-            report_id=source_file,
+            report_id=report_id,
             report_key=fact.name,
             period_end=ctx.period_end,
             units=normalized_unit,
@@ -178,4 +179,3 @@ def extract_finance_facts(
         facts.append(record)
 
     return facts
-
