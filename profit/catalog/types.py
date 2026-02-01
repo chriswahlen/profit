@@ -82,6 +82,12 @@ class FinanceFactRecord:
     units: str
     value: float | int | None
     asof: datetime
+    period_start: datetime | None = None
+    decimals: int | None = None
+    dimensions_sig: str | None = None
+    is_consolidated: bool | None = None
+    amendment_flag: bool | None = None
+    filed_at: datetime | None = None
     attrs: dict[str, Any] | None = None
 
 

@@ -150,6 +150,36 @@ def _forms_for_cik(db: EdgarDatabase, cik: str) -> dict[str, str]:
     return mapping
 
 
+def _filed_at_map(db: EdgarDatabase, cik: str) -> dict[str, datetime | None]:
+    """Return accession->filed_at (acceptanceDateTime) map for a cik."""
+    cur = db.conn.execute("SELECT payload FROM edgar_submissions WHERE cik = ? LIMIT 1", (normalize_cik(cik),))
+    row = cur.fetchone()
+    if not row:
+        return {}
+    try:
+        import json
+
+        data = json.loads(row["payload"])
+    except Exception:
+        return {}
+    filings = (data.get("filings") or {}).get("recent") or {}
+    accessions = filings.get("accessionNumber") or []
+    acceptance = filings.get("acceptanceDateTime") or []
+    filed_map: dict[str, datetime | None] = {}
+    for idx, acc in enumerate(accessions):
+        norm_acc = normalize_accession(acc)
+        ts_raw = acceptance[idx] if idx < len(acceptance) else None
+        dt_val: datetime | None = None
+        if ts_raw:
+            try:
+                ts_norm = ts_raw.replace(" ", "T")
+                dt_val = datetime.fromisoformat(ts_norm).replace(tzinfo=timezone.utc)
+            except Exception:
+                dt_val = None
+        filed_map[norm_acc] = dt_val
+    return filed_map
+
+
 def _process_accession(
     *,
     accession: str,
@@ -157,6 +187,7 @@ def _process_accession(
     db: EdgarDatabase,
     store: EntityStore,
     asof: datetime,
+    filed_at: datetime | None,
     dry_run: bool,
     force: bool,
     form_map: dict[str, str],
@@ -197,6 +228,7 @@ def _process_accession(
                 source_file=name,
                 source_url=name_to_url.get(name),
                 asof=asof,
+                filed_at=filed_at,
             )
         )
 
@@ -249,18 +281,22 @@ def main() -> None:
     asof = datetime.now(timezone.utc)
     count = 0
     form_cache: dict[str, dict[str, str]] = {}
+    filed_cache: dict[str, dict[str, datetime | None]] = {}
     for accession, cik in _iter_accessions(edgar_db, cik=args.cik, accession=args.accession, force=args.force):
         count += 1
         if args.limit and count > args.limit:
             break
         if cik not in form_cache:
             form_cache[cik] = _forms_for_cik(edgar_db, cik)
+        if cik not in filed_cache:
+            filed_cache[cik] = _filed_at_map(edgar_db, cik)
         written = _process_accession(
             accession=accession,
             cik=cik,
             db=edgar_db,
             store=store,
             asof=asof,
+            filed_at=filed_cache.get(cik, {}).get(normalize_accession(accession)),
             dry_run=args.dry_run,
             force=args.force,
             form_map=form_cache.get(cik, {}),

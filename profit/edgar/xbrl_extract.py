@@ -124,6 +124,7 @@ def extract_finance_facts(
     source_file: str,
     source_url: str | None,
     asof: datetime,
+    filed_at: datetime | None,
 ) -> list[FinanceFactRecord]:
     """Transform an XBRL instance into FinanceFactRecord rows.
 
@@ -173,9 +174,15 @@ def extract_finance_facts(
             record_id=accession,
             report_id=report_id,
             report_key=fact.name,
+            period_start=ctx.period_start,
             period_end=ctx.period_end,
             units=normalized_unit,
             value=fact.value,
+            decimals=int(fact.decimals) if fact.decimals and fact.decimals.strip("-").isdigit() else None,
+            dimensions_sig=None,
+            is_consolidated=None,
+            amendment_flag=None,
+            filed_at=filed_at,
             asof=asof,
             attrs=attrs,
         )

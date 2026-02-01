@@ -16,9 +16,17 @@ def _dt_to_str(dt: datetime) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
 
+def _maybe_dt_to_str(dt: datetime | None) -> str | None:
+    return _dt_to_str(dt) if dt is not None else None
+
 
 def _str_to_dt(val: str) -> datetime:
     return datetime.fromisoformat(val)
+
+def _bool_to_int(val: bool | None) -> int | None:
+    if val is None:
+        return None
+    return 1 if val else 0
 
 
 _ENTITY_ID_RE = re.compile(r"^[a-z0-9:_/-]+$")
@@ -94,7 +102,13 @@ class EntityStore:
                 record_id          TEXT NOT NULL,
                 report_id          TEXT NOT NULL,
                 report_key         TEXT NOT NULL,
+                period_start       TEXT,
                 period_end         TEXT NOT NULL,
+                decimals           INTEGER,
+                dimensions_sig     TEXT,
+                is_consolidated    INTEGER,
+                amendment_flag     INTEGER,
+                filed_at           TEXT,
                 units              TEXT NOT NULL,
                 value              REAL,
                 asof               TEXT NOT NULL,
@@ -236,7 +250,7 @@ class EntityStore:
             )
             cur.execute(
                 """
-                SELECT value, units, asof, attrs
+                SELECT value, units, asof, attrs, decimals, period_start, dimensions_sig, is_consolidated, amendment_flag, filed_at
                 FROM company_finance_fact
                 WHERE provider_id = ? AND provider_entity_id = ? AND record_id = ? AND report_id = ?
                       AND report_key = ? AND period_end = ?
@@ -252,6 +266,12 @@ class EntityStore:
                     existing["value"] == r.value
                     and existing["units"] == r.units
                     and existing["attrs"] == attrs_json
+                    and existing["decimals"] == r.decimals
+                    and existing["period_start"] == _maybe_dt_to_str(r.period_start)
+                    and existing["dimensions_sig"] == r.dimensions_sig
+                    and existing["is_consolidated"] == _bool_to_int(r.is_consolidated)
+                    and existing["amendment_flag"] == _bool_to_int(r.amendment_flag)
+                    and existing["filed_at"] == _maybe_dt_to_str(r.filed_at)
                 ):
                     # identical payload; keep earliest asof
                     if r.asof > existing_asof:
@@ -274,7 +294,8 @@ class EntityStore:
                 cur.execute(
                     """
                     UPDATE company_finance_fact
-                    SET entity_id=?, units=?, value=?, asof=?, attrs=?
+                    SET entity_id=?, units=?, value=?, asof=?, attrs=?, decimals=?, period_start=?, dimensions_sig=?,
+                        is_consolidated=?, amendment_flag=?, filed_at=?
                     WHERE provider_id = ? AND provider_entity_id = ? AND record_id = ? AND report_id = ?
                           AND report_key = ? AND period_end = ?
                     """,
@@ -284,6 +305,12 @@ class EntityStore:
                         r.value,
                         new_asof,
                         attrs_json,
+                        r.decimals,
+                        _maybe_dt_to_str(r.period_start),
+                        r.dimensions_sig,
+                        _bool_to_int(r.is_consolidated),
+                        _bool_to_int(r.amendment_flag),
+                        _maybe_dt_to_str(r.filed_at),
                         *key,
                     ),
                 )
@@ -293,8 +320,9 @@ class EntityStore:
                     """
                     INSERT INTO company_finance_fact (
                         entity_id, provider_id, provider_entity_id, record_id, report_id,
-                        report_key, period_end, units, value, asof, attrs
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        report_key, period_start, period_end, decimals, dimensions_sig,
+                        is_consolidated, amendment_flag, filed_at, units, value, asof, attrs
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r.entity_id,
@@ -303,7 +331,13 @@ class EntityStore:
                         r.record_id,
                         r.report_id,
                         r.report_key,
+                        _maybe_dt_to_str(r.period_start),
                         _dt_to_str(r.period_end),
+                        r.decimals,
+                        r.dimensions_sig,
+                        _bool_to_int(r.is_consolidated),
+                        _bool_to_int(r.amendment_flag),
+                        _maybe_dt_to_str(r.filed_at),
                         r.units,
                         r.value,
                         new_asof,
