@@ -52,6 +52,45 @@ def _resolve_entity(store: EntityStore, cik: str) -> str | None:
     return store.find_entity_by_identifier(scheme="sec:cik", value=normalize_cik(cik))
 
 
+def _ensure_marker_table(db: EdgarDatabase) -> None:
+    db.conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS edgar_fact_extract (
+            cik TEXT NOT NULL,
+            accession TEXT NOT NULL,
+            processed_at TEXT NOT NULL,
+            fact_count INTEGER,
+            note TEXT,
+            PRIMARY KEY (cik, accession)
+        )
+        """
+    )
+    db.conn.commit()
+
+
+def _has_processed(db: EdgarDatabase, cik: str, accession: str) -> bool:
+    cur = db.conn.execute(
+        "SELECT 1 FROM edgar_fact_extract WHERE cik = ? AND accession = ?",
+        (normalize_cik(cik), normalize_accession(accession)),
+    )
+    return cur.fetchone() is not None
+
+
+def _mark_processed(db: EdgarDatabase, cik: str, accession: str, fact_count: int, note: str | None) -> None:
+    db.conn.execute(
+        """
+        INSERT INTO edgar_fact_extract (cik, accession, processed_at, fact_count, note)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(cik, accession) DO UPDATE SET
+            processed_at=excluded.processed_at,
+            fact_count=excluded.fact_count,
+            note=excluded.note
+        """,
+        (normalize_cik(cik), normalize_accession(accession), datetime.now(timezone.utc).isoformat(), fact_count, note),
+    )
+    db.conn.commit()
+
+
 def _load_source_url(db: EdgarDatabase, accession: str) -> dict[str, str | None]:
     info = db.get_accession_files_info(accession)
     return {name: url for name, url in info}
@@ -90,11 +129,16 @@ def _process_accession(
     store: EntityStore,
     asof: datetime,
     dry_run: bool,
+    force: bool,
 ) -> int:
     provider_entity_id = normalize_cik(cik)
     entity_id = _resolve_entity(store, provider_entity_id)
     if not entity_id:
         logging.warning("missing entity for cik=%s; skip accession=%s", provider_entity_id, accession)
+        return 0
+
+    if not force and _has_processed(db, provider_entity_id, accession):
+        logging.info("skip accession=%s (already processed); use --force to reprocess", accession)
         return 0
 
     report_id = _lookup_form(db, provider_entity_id, accession)
@@ -145,6 +189,7 @@ def _process_accession(
         return len(facts)
 
     written = store.upsert_finance_facts(facts)
+    _mark_processed(db, provider_entity_id, accession, written, report_id)
     logging.info("written facts=%s accession=%s", written, accession)
     return written
 
@@ -160,6 +205,7 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument("--limit", type=int, help="Limit number of accessions processed")
     parser.add_argument("--dry-run", action="store_true", help="Parse only; do not write to company_finance_fact")
+    parser.add_argument("--force", action="store_true", help="Reprocess even if accession was already extracted")
 
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
@@ -167,6 +213,7 @@ def main() -> None:
     cfg = _profit_cfg(args)
     edgar_db_path = args.edgar_db or cfg.data_root / "edgar.sqlite3"
     edgar_db = EdgarDatabase(edgar_db_path)
+    _ensure_marker_table(edgar_db)
     store = EntityStore(cfg.store_path)
 
     asof = datetime.now(timezone.utc)
@@ -182,6 +229,7 @@ def main() -> None:
             store=store,
             asof=asof,
             dry_run=args.dry_run,
+            force=args.force,
         )
         logging.info("accession=%s facts_written=%s", accession, written)
 
