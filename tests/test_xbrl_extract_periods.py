@@ -42,6 +42,7 @@ def test_extract_periods_duration_and_instant():
         source_url=None,
         asof=datetime(2025, 1, 1, tzinfo=timezone.utc),
         filed_at=datetime(2024, 12, 31, 16, 32, 14, tzinfo=timezone.utc),
+        amendment_flag=False,
     )
     assert len(facts) == 2
     dur = next(f for f in facts if f.report_key == "revenue")
@@ -50,9 +51,46 @@ def test_extract_periods_duration_and_instant():
     assert dur.period_end.date().isoformat() == "2024-03-31"
     assert inst.period_start is None
     assert inst.period_end.date().isoformat() == "2024-12-31"
-    assert dur.decimals == 0
-    assert inst.decimals == -3
-    assert dur.filed_at.isoformat() == "2024-12-31T16:32:14+00:00"
+    assert dur.is_consolidated is True  # no segment -> consolidated
+    assert inst.is_consolidated is True
+    assert dur.dimensions_sig == ""
+    assert inst.dimensions_sig == ""
+
+
+def test_dimensions_explicit_member_sets_sig_and_non_consolidated():
+    xml = b"""
+    <xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi">
+      <xbrli:context id="ctx_seg">
+        <xbrli:entity>
+          <xbrli:identifier scheme="CIK">0001</xbrli:identifier>
+          <xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">aapl:ServicesMember</xbrldi:explicitMember>
+          </xbrli:segment>
+        </xbrli:entity>
+        <xbrli:period><xbrli:instant>2025-12-31</xbrli:instant></xbrli:period>
+      </xbrli:context>
+      <xbrli:unit id="USD"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+      <cash contextRef="ctx_seg" unitRef="USD">7</cash>
+    </xbrli:xbrl>
+    """
+    facts = extract_finance_facts(
+        xml_bytes=xml,
+        cik="0001",
+        accession="0001-04",
+        entity_id="entity:1",
+        provider_id="sec:edgar",
+        provider_entity_id="0001",
+        report_id="10-K",
+        source_file="file.xml",
+        source_url=None,
+        asof=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        filed_at=None,
+        amendment_flag=False,
+    )
+    assert len(facts) == 1
+    fact = facts[0]
+    assert fact.is_consolidated is False
+    assert fact.dimensions_sig != ""
 
 
 def test_extract_skips_invalid_and_missing_contexts(caplog):
@@ -69,6 +107,7 @@ def test_extract_skips_invalid_and_missing_contexts(caplog):
         source_url=None,
         asof=datetime(2025, 1, 1, tzinfo=timezone.utc),
         filed_at=None,
+        amendment_flag=False,
     )
     assert len(facts) == 2  # bad context and missing context are skipped
     assert any("contexts missing usable period_end" in rec.message for rec in caplog.records)
@@ -97,6 +136,7 @@ def test_parse_datetime_strings_truncates_to_date():
         source_url=None,
         asof=datetime(2025, 1, 1, tzinfo=timezone.utc),
         filed_at=None,
+        amendment_flag=False,
     )
     assert len(facts) == 1
     assert facts[0].period_end.date().isoformat() == "2024-12-31"
@@ -122,6 +162,7 @@ def test_root_with_generic_prefix_processed():
         source_url=None,
         asof=datetime(2025, 1, 1, tzinfo=timezone.utc),
         filed_at=None,
+        amendment_flag=False,
     )
     assert len(facts) == 1
     assert facts[0].period_end.date().isoformat() == "2025-12-31"

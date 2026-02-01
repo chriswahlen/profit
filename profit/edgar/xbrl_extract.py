@@ -9,9 +9,10 @@ presentation/calculation/linkbase data.
 """
 
 import logging
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from xml.etree import ElementTree as ET
 
 from profit.catalog.types import FinanceFactRecord
@@ -37,6 +38,74 @@ class ParsedUnit:
     id: str
     measures: List[str]
 
+# --- Dimensions helpers -----------------------------------------------------
+
+def _normalize_qname(raw: str | None) -> str:
+    if not raw:
+        return ""
+    raw = raw.strip()
+    return raw
+
+
+def _canonicalize_typed_member(elem: ET.Element) -> str:
+    text = (elem.text or "").strip()
+    if text:
+        return text
+    serialized = ET.tostring(elem, encoding="utf-8", method="xml")
+    return "HASH:" + hashlib.sha1(serialized).hexdigest()
+
+
+def _context_dimensions(root: ET.Element) -> Dict[str, tuple[str, bool, str]]:
+    """
+    Build ctx_id -> (dimensions_sig, is_consolidated, canonical_dim_string).
+
+    - is_consolidated: True when segment is absent or empty; False when segment exists and has dimensional content.
+    - dimensions_sig: SHA1 of sorted dimension tokens; empty string when consolidated with no dimensions.
+    - canonical_dim_string: pipe-joined tokens or hash marker for unparsed segment content.
+    """
+    ctx_dims: Dict[str, tuple[str, bool, str]] = {}
+    for ctx in root.findall(".//{http://www.xbrl.org/2003/instance}context"):
+        ctx_id = ctx.get("id")
+        if not ctx_id:
+            continue
+        segment = ctx.find("{http://www.xbrl.org/2003/instance}entity/{http://www.xbrl.org/2003/instance}segment")
+        if segment is None:
+            ctx_dims[ctx_id] = ("", True, "")
+            continue
+
+        tokens: list[str] = []
+        explicit_members = segment.findall(".//{http://xbrl.org/2006/xbrldi}explicitMember")
+        typed_members = segment.findall(".//{http://xbrl.org/2006/xbrldi}typedMember")
+
+        for em in explicit_members:
+            axis = _normalize_qname(em.get("dimension"))
+            member = _normalize_qname((em.text or "").strip())
+            if axis and member:
+                tokens.append(f"{axis}={member}")
+
+        for tm in typed_members:
+            axis = _normalize_qname(tm.get("dimension"))
+            if not axis:
+                continue
+            typed_val = _canonicalize_typed_member(tm)
+            tokens.append(f"{axis}=TYPED({typed_val})")
+
+        if not tokens and len(list(segment)) == 0:
+            ctx_dims[ctx_id] = ("", True, "")
+            continue
+
+        if not tokens and len(list(segment)) > 0:
+            ser = ET.tostring(segment, encoding="utf-8", method="xml")
+            canonical_dim_string = "SEGMENT_HASH:" + hashlib.sha1(ser).hexdigest()
+            dim_sig = hashlib.sha1(canonical_dim_string.encode()).hexdigest()
+            ctx_dims[ctx_id] = (dim_sig, False, canonical_dim_string)
+            continue
+
+        tokens = sorted(tokens)
+        canonical_dim_string = "|".join(tokens)
+        dim_sig = hashlib.sha1(canonical_dim_string.encode()).hexdigest() if canonical_dim_string else ""
+        ctx_dims[ctx_id] = (dim_sig, False, canonical_dim_string)
+    return ctx_dims
 
 # --- Parsing helpers -------------------------------------------------------
 
@@ -141,6 +210,7 @@ def extract_finance_facts(
     source_url: str | None,
     asof: datetime,
     filed_at: datetime | None,
+    amendment_flag: bool | None,
 ) -> list[FinanceFactRecord]:
     """Transform an XBRL instance into FinanceFactRecord rows.
 
@@ -170,6 +240,7 @@ def extract_finance_facts(
         return []
 
     contexts = parse_contexts(root)
+    ctx_dims = _context_dimensions(root)
     units = parse_units(root)
     parsed = parse_xbrl(xml_bytes)
 
@@ -179,6 +250,7 @@ def extract_finance_facts(
         if ctx is None or ctx.period_end is None:
             logger.debug("skip fact name=%s missing context_ref=%s", fact.name, fact.context_ref)
             continue  # cannot place the fact in time
+        dim_sig, is_cons, canonical_dims = ctx_dims.get(fact.context_ref or "", ("", True, ""))
         unit = units.get(fact.unit_ref or "")
         normalized_unit = _normalize_unit(unit.measures) if unit else None
         if normalized_unit is None:
@@ -189,12 +261,15 @@ def extract_finance_facts(
         attrs.update(
             {
                 "context_period_type": ctx.period_type,
-                "context_period_start": ctx.period_start.isoformat() if ctx.period_start else None,
+                # Do not duplicate fields already stored as columns.
                 "source_file": source_file,
                 "source_url": source_url,
                 "namespace": attrs.get("xmlns") or None,
+                "dimensions_canonical": canonical_dims or None,
             }
         )
+        # Strip attrs that are None/empty to keep payload lean.
+        attrs = {k: v for k, v in attrs.items() if v not in (None, "")}
 
         record = FinanceFactRecord(
             entity_id=entity_id,
@@ -208,9 +283,9 @@ def extract_finance_facts(
             units=normalized_unit,
             value=fact.value,
             decimals=int(fact.decimals) if fact.decimals and fact.decimals.strip("-").isdigit() else None,
-            dimensions_sig=None,
-            is_consolidated=None,
-            amendment_flag=None,
+            dimensions_sig=dim_sig,
+            is_consolidated=is_cons,
+            amendment_flag=amendment_flag,
             filed_at=filed_at,
             asof=asof,
             attrs=attrs,

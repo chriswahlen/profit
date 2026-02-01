@@ -56,7 +56,7 @@ def _iter_accessions(
 
     if force:
         for acc, ck in candidates:
-            yield normalize_accession(acc), normalize_cik(ck)
+            yield acc, normalize_cik(ck)
         return
 
     # Gather processed markers (by cik, normalized accession)
@@ -188,6 +188,7 @@ def _process_accession(
     store: EntityStore,
     asof: datetime,
     filed_at: datetime | None,
+    amendment_flag: bool | None,
     dry_run: bool,
     force: bool,
     form_map: dict[str, str],
@@ -231,6 +232,7 @@ def _process_accession(
                 source_url=name_to_url.get(name),
                 asof=asof,
                 filed_at=filed_at,
+                amendment_flag=amendment_flag,
             )
         )
 
@@ -322,6 +324,15 @@ def main() -> None:
             form_cache[cik] = _forms_for_cik(edgar_db, cik)
         if cik not in filed_cache:
             filed_cache[cik] = _filed_at_map(edgar_db, cik)
+        report_id = form_cache.get(cik, {}).get(normalize_accession(accession), "UNKNOWN")
+        amendment_flag = None
+        base_form = report_id
+        if report_id and report_id.endswith("/A"):
+            amendment_flag = True
+            base_form = report_id[:-2]
+        elif report_id:
+            amendment_flag = False
+
         written = _process_accession(
             accession=accession,
             cik=cik,
@@ -329,6 +340,7 @@ def main() -> None:
             store=store,
             asof=asof,
             filed_at=filed_cache.get(cik, {}).get(normalize_accession(accession)),
+            amendment_flag=amendment_flag,
             dry_run=args.dry_run,
             force=args.force,
             form_map=form_cache.get(cik, {}),
