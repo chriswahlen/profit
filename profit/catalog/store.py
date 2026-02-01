@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from profit.catalog.types import InstrumentRecord
 
@@ -176,6 +176,63 @@ class CatalogStore:
         )
         self.conn.commit()
         return len(records)
+
+    def upsert_provider_mapping(
+        self,
+        *,
+        instrument_id: str,
+        provider: str,
+        provider_code: str,
+        active_from: datetime | None = None,
+        attrs: dict[str, Any] | None = None,
+        last_seen: datetime | None = None,
+    ) -> None:
+        """
+        Insert or refresh a provider mapping entry without re-upserting the instrument record.
+        """
+        now = last_seen or datetime.now(timezone.utc)
+        active_from_ts = _dt_to_str(active_from or now)
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO instrument_provider_map (
+                instrument_id, provider, provider_code,
+                active_from, active_to, last_seen, attrs
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, provider_code) DO UPDATE SET
+                instrument_id=excluded.instrument_id,
+                active_from=MIN(
+                    COALESCE(instrument_provider_map.active_from, excluded.active_from),
+                    excluded.active_from
+                ),
+                active_to=CASE
+                    WHEN instrument_provider_map.active_to IS NOT NULL AND excluded.active_to IS NULL THEN NULL
+                    WHEN instrument_provider_map.active_to IS NULL THEN excluded.active_to
+                    ELSE instrument_provider_map.active_to
+                END,
+                last_seen=excluded.last_seen,
+                attrs=excluded.attrs;
+            """,
+            (
+                instrument_id,
+                provider,
+                provider_code,
+                active_from_ts,
+                None,
+                _dt_to_str(now),
+                json.dumps(attrs or {}),
+            ),
+        )
+        self.conn.commit()
+
+    def remove_provider_mapping(self, *, provider: str, provider_code: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM instrument_provider_map WHERE provider = ? AND provider_code = ?",
+            (provider, provider_code),
+        )
+        self.conn.commit()
 
     def upsert_instrument_entities(
         self,

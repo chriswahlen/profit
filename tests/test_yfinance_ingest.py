@@ -80,23 +80,32 @@ def test_fetch_and_store_writes_columnar(tmp_path):
     stores.close()
 
 
-def test_missing_instrument_raises(tmp_path):
+def test_missing_instrument_is_created_via_derivation(tmp_path):
     db_path = tmp_path / "col.sqlite3"
     stores = StoreContainer.open(db_path)
     cfg = _cfg(tmp_path, db_path)
     cache = FileCache(base_dir=tmp_path)
 
-    with pytest.raises(RuntimeError):
-        fetch_and_store_yfinance(
-            instrument_ids=["EQ|MSFT"],
-            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            end=datetime(2024, 1, 2, tzinfo=timezone.utc),
-            cfg=cfg,
-            stores=stores,
-            cache=cache,
-            ttl=timedelta(days=1),
-            download_fn=lambda *args, **kwargs: pd.DataFrame(),
-        )
+    # No instrument present initially.
+    idx = pd.date_range("2024-01-01", periods=1, freq="D", tz=timezone.utc)
+    df = pd.DataFrame(
+        {"Open": [1.0], "High": [1.5], "Low": [0.5], "Close": [1.2], "Adj Close": [1.1], "Volume": [100]},
+        index=idx,
+    )
+    fetch_and_store_yfinance(
+        instrument_ids=["EQ|MSFT"],
+        start=idx[0],
+        end=idx[0],
+        cfg=cfg,
+        stores=stores,
+        cache=cache,
+        ttl=timedelta(days=1),
+        download_fn=lambda *args, **kwargs: df,
+    )
+
+    rec = stores.catalog.get_instrument(provider="yfinance", provider_code="MSFT")
+    assert rec is not None
+    assert rec.instrument_id == "EQ|MSFT"
     stores.close()
 
 
@@ -235,4 +244,53 @@ def test_fallback_to_available_provider_code(tmp_path):
         instrument_id="XNAS|AAPL", field="close", step_us=86_400_000_000
     )
     assert sid is not None
+    stores.close()
+
+
+def test_missing_provider_mapping_is_inserted_after_fetch(tmp_path):
+    db_path = tmp_path / "col.sqlite3"
+    stores = StoreContainer.open(db_path)
+    canonical = InstrumentRecord(
+        instrument_id="XNAS|AAPL",
+        instrument_type="equity",
+        provider="yfinance",
+        provider_code="XNAS|AAPL",
+        mic="XNAS",
+        currency="USD",
+        active_from=datetime(1900, 1, 1, tzinfo=timezone.utc),
+        active_to=None,
+        attrs={},
+    )
+    stores.catalog.upsert_instruments([canonical])
+    cur = stores.catalog.conn.cursor()
+    cur.execute(
+        "DELETE FROM instrument_provider_map WHERE provider = ? AND instrument_id = ? AND provider_code = ?",
+        ("yfinance", "XNAS|AAPL", "XNAS|AAPL"),
+    )
+    cur.execute(
+        "DELETE FROM instrument_provider_map WHERE provider = ? AND provider_code = ?",
+        ("yfinance", "AAPL"),
+    )
+    stores.catalog.conn.commit()
+
+    idx = pd.date_range("2024-01-01", periods=1, freq="D", tz=timezone.utc)
+    df = pd.DataFrame(
+        {"Open": [1.0], "High": [1.5], "Low": [0.5], "Close": [1.2], "Adj Close": [1.1], "Volume": [100]},
+        index=idx,
+    )
+
+    fetch_and_store_yfinance(
+        instrument_ids=["XNAS|AAPL"],
+        start=idx[0],
+        end=idx[0],
+        cfg=_cfg(tmp_path, db_path),
+        stores=stores,
+        cache=FileCache(base_dir=tmp_path),
+        ttl=timedelta(days=1),
+        download_fn=lambda *args, **kwargs: df,
+    )
+
+    rec = stores.catalog.get_instrument(provider="yfinance", provider_code="AAPL")
+    assert rec is not None
+    assert rec.instrument_id == "XNAS|AAPL"
     stores.close()

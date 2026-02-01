@@ -8,8 +8,9 @@ the network by swapping in a stubbed download_fn on the fetcher.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Sequence, Tuple
+from typing import Iterable, Sequence
 
 import pandas as pd
 
@@ -31,18 +32,67 @@ GRID_ORIGIN_US = int(datetime(1900, 1, 1, tzinfo=timezone.utc).timestamp() * 1_0
 WINDOW_POINTS = 1095  # align with Stooq seeders (3 years per slice)
 
 
+@dataclass(frozen=True)
+class ResolvedInstrument:
+    instrument_id: str
+    provider_code: str
+    derived: bool
+
+
 def _parse_date(val: str) -> datetime:
     return datetime.fromisoformat(val).replace(tzinfo=timezone.utc) if "T" not in val else datetime.fromisoformat(val).astimezone(timezone.utc)
 
 
+def _derive_provider_code(instrument_id: str) -> str | None:
+    if "|" not in instrument_id:
+        return None
+    return instrument_id.split("|", 1)[1].upper()
+
+
+def _ensure_derived_placeholder(
+    catalog: CatalogStore,
+    resolved_inst: ResolvedInstrument,
+    start: datetime,
+) -> None:
+    if not resolved_inst.derived:
+        return
+    inst_id = resolved_inst.instrument_id
+    provider_code = resolved_inst.provider_code
+    inst_exists = catalog.conn.execute(
+        "SELECT 1 FROM instrument WHERE instrument_id = ? LIMIT 1", (inst_id,)
+    ).fetchone()
+    if inst_exists is None:
+        prefix = inst_id.split("|", 1)[0] if "|" in inst_id else None
+        instr = InstrumentRecord(
+            instrument_id=inst_id,
+            instrument_type="equity",
+            provider=PROVIDER,
+            provider_code=provider_code,
+            mic=prefix,
+            currency=None,
+            active_from=start,
+            active_to=None,
+            attrs={"derived_temp": True},
+        )
+        catalog.upsert_instruments([instr])
+        return
+    catalog.upsert_provider_mapping(
+        instrument_id=inst_id,
+        provider=PROVIDER,
+        provider_code=provider_code,
+        active_from=start,
+        attrs={"derived_temp": True},
+    )
+
+
 def _resolve_provider_codes(
     catalog: CatalogStore, instrument_ids: Sequence[str]
-) -> list[Tuple[str, str, InstrumentRecord]]:
+) -> list[ResolvedInstrument]:
     """
-    Given canonical instrument_ids, resolve to (instrument_id, provider_code, record).
-    Raises if any mapping is missing.
+    Given canonical instrument_ids, resolve to provider codes.
+    Raises if a provider mapping cannot be derived.
     """
-    out: list[Tuple[str, str, InstrumentRecord]] = []
+    out: list[ResolvedInstrument] = []
     missing: list[str] = []
     for inst in instrument_ids:
         cur = catalog.conn.cursor()
@@ -57,28 +107,16 @@ def _resolve_provider_codes(
         )
         row = cur.fetchone()
         provider_code = row[0] if row else None
-        rec = catalog.get_instrument(provider=PROVIDER, provider_code=provider_code) if provider_code else None
-        if rec is None:
-            if "|" in inst:
-                fallback = inst.split("|", 1)[1].upper()
-                if provider_code != fallback:
-                    cur2 = catalog.conn.cursor()
-                    cur2.execute(
-                        """
-                        SELECT instrument_id
-                        FROM instrument_provider_map
-                        WHERE provider = ? AND provider_code = ?
-                        LIMIT 1;
-                        """,
-                        (PROVIDER, fallback),
-                    )
-                    if cur2.fetchone():
-                        rec = catalog.get_instrument(provider=PROVIDER, provider_code=fallback)
-                        provider_code = fallback
-        if rec is None or provider_code is None:
+        derived = False
+        if provider_code is None:
+            fallback = _derive_provider_code(inst)
+            if fallback:
+                provider_code = fallback
+                derived = True
+        if provider_code is None:
             missing.append(inst)
             continue
-        out.append((inst, provider_code, rec))
+        out.append(ResolvedInstrument(inst, provider_code, derived))
     if missing:
         raise RuntimeError(
             "Missing yfinance provider mapping for instrument_id(s): " + ", ".join(sorted(set(missing)))
@@ -167,7 +205,6 @@ def fetch_and_store_yfinance(
         raise ValueError("at least one instrument_id is required")
 
     resolved = _resolve_provider_codes(stores.catalog, instrument_ids)
-    records = {inst: rec for inst, _pc, rec in resolved}
     lifecycle = CatalogLifecycleReader(stores.catalog)
     _ensure_catalog_meta(stores.catalog, PROVIDER, datetime.now(timezone.utc))
 
@@ -193,14 +230,39 @@ def fetch_and_store_yfinance(
         download_fn=download_fn,
     )
 
-    requests = [YFinanceRequest(ticker=pc, provider_code=pc) for _inst, pc, _rec in resolved]
-    frames = fetcher.timeseries_fetch_many(requests, start, end)
+    requests = [YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code) for inst in resolved]
+    derived_codes = {inst.provider_code for inst in resolved if inst.derived}
+    for inst in resolved:
+        _ensure_derived_placeholder(stores.catalog, inst, start)
+    pending_derived = set(derived_codes)
+    try:
+        frames = fetcher.timeseries_fetch_many(requests, start, end)
+    except Exception:
+        for code in list(pending_derived):
+            stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+        raise
 
-    for (instrument_id, pc, _rec), frame in zip(resolved, frames):
+    for resolved_inst, frame in zip(resolved, frames):
+        instrument_id = resolved_inst.instrument_id
+        if resolved_inst.derived:
+            if dry_run or frame.empty:
+                stores.catalog.remove_provider_mapping(
+                    provider=PROVIDER,
+                    provider_code=resolved_inst.provider_code,
+                )
+                pending_derived.discard(resolved_inst.provider_code)
+            else:
+                stores.catalog.upsert_provider_mapping(
+                    instrument_id=instrument_id,
+                    provider=PROVIDER,
+                    provider_code=resolved_inst.provider_code,
+                    active_from=start,
+                )
+                pending_derived.discard(resolved_inst.provider_code)
         if dry_run:
             logger.info(
                 "yfinance dry-run ticker=%s instrument_id=%s points=%s",
-                pc,
+                resolved_inst.provider_code,
                 instrument_id,
                 len(frame.index),
             )
@@ -208,7 +270,9 @@ def fetch_and_store_yfinance(
         _write_frame(stores.columnar, instrument_id, frame)
         logger.info(
             "yfinance stored ticker=%s instrument_id=%s points=%s",
-            pc,
+            resolved_inst.provider_code,
             instrument_id,
             len(frame.index),
         )
+    for code in list(pending_derived):
+        stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
