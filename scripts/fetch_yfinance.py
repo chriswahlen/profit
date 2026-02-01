@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from profit.cache import FileCache
@@ -14,8 +14,13 @@ from profit.stores import StoreContainer
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch yfinance OHLCV bars into the columnar store")
     parser.add_argument("instrument_ids", help="Comma-separated canonical instrument_ids (e.g., XNAS|AAPL,XNYS|MSFT)")
-    parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
-    parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
+    parser.add_argument("--start", help="Start date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
+    parser.add_argument("--end", help="End date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
+    parser.add_argument(
+        "--catch-up",
+        action="store_true",
+        help="Ignore --start/--end and fetch from the last recorded day (any provider) to now",
+    )
     parser.add_argument("--ttl-days", type=int, default=1, help="Cache TTL days (default 1)")
     parser.add_argument("--offline", action="store_true", help="Use cache only; skip network requests")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and log counts without writing to the columnar store")
@@ -31,9 +36,18 @@ def main() -> None:
     stores = StoreContainer.open(cfg.store_path)
 
     try:
-        start = _parse_date(args.start)
-        end = _parse_date(args.end)
         instrument_ids = [t.strip() for t in args.instrument_ids.split(",") if t.strip()]
+
+        if not args.catch_up:
+            if not args.start or not args.end:
+                parser.error("--start and --end are required unless --catch-up is used")
+            start = _parse_date(args.start)
+            end = _parse_date(args.end)
+        else:
+            # Catch-up ignores provided bounds; default to wide window if omitted.
+            start = _parse_date(args.start) if args.start else datetime(1900, 1, 1, tzinfo=timezone.utc)
+            end = _parse_date(args.end) if args.end else datetime.now(timezone.utc)
+
         fetch_and_store_yfinance(
             instrument_ids=instrument_ids,
             start=start,
@@ -44,6 +58,7 @@ def main() -> None:
             offline=args.offline,
             ttl=timedelta(days=args.ttl_days),
             dry_run=args.dry_run,
+            catch_up=args.catch_up,
         )
     finally:
         stores.close()

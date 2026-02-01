@@ -177,6 +177,42 @@ def _write_frame(store: ColumnarSqliteStore, instrument_id: str, frame: pd.DataF
             store.bump_high_water_ts_us(sid, int(last_ts.timestamp() * 1_000_000))
 
 
+def _catchup_window(
+    store: ColumnarSqliteStore,
+    instrument_id: str,
+    default_start: datetime,
+    now: datetime,
+) -> tuple[datetime, datetime]:
+    """Return the window for catch-up fetches.
+
+    The start date is the last recorded day in the columnar store for the
+    instrument across any provider. If no data exists, raise instead of
+    guessing, so callers can decide how to seed history. End always uses ``now``.
+    """
+
+    latest_ts_us: int | None = None
+    for field in FIELD_ORDER:
+        sid = store.get_series_id(instrument_id=instrument_id, field=field, step_us=STEP_US)
+        if sid is None:
+            continue
+        hw = store.get_high_water_ts_us(sid)
+        if hw is None:
+            continue
+        if latest_ts_us is None or hw > latest_ts_us:
+            latest_ts_us = hw
+
+    if latest_ts_us is None:
+        raise RuntimeError(
+            f"catch-up requires existing data for instrument_id={instrument_id}; none found"
+        )
+
+    latest_dt = datetime.fromtimestamp(latest_ts_us / 1_000_000, tz=timezone.utc)
+    start = latest_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if start > now:
+        start = now
+    return start, now
+
+
 def fetch_and_store_yfinance(
     *,
     instrument_ids: Iterable[str],
@@ -189,6 +225,7 @@ def fetch_and_store_yfinance(
     ttl: timedelta = timedelta(days=1),
     download_fn=None,
     dry_run: bool = False,
+    catch_up: bool = False,
 ) -> None:
     """
     Fetch yfinance OHLCV for tickers in [start, end] and write to columnar store.
@@ -230,49 +267,96 @@ def fetch_and_store_yfinance(
         download_fn=download_fn,
     )
 
+    # Allow per-instrument catch-up windows.
+    now = datetime.now(timezone.utc)
     requests = [YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code) for inst in resolved]
     derived_codes = {inst.provider_code for inst in resolved if inst.derived}
     for inst in resolved:
         _ensure_derived_placeholder(stores.catalog, inst, start)
     pending_derived = set(derived_codes)
-    try:
-        frames = fetcher.timeseries_fetch_many(requests, start, end)
-    except Exception:
-        for code in list(pending_derived):
-            stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
-        raise
 
-    for resolved_inst, frame in zip(resolved, frames):
-        instrument_id = resolved_inst.instrument_id
-        if resolved_inst.derived:
-            if dry_run or frame.empty:
-                stores.catalog.remove_provider_mapping(
-                    provider=PROVIDER,
-                    provider_code=resolved_inst.provider_code,
-                )
-                pending_derived.discard(resolved_inst.provider_code)
-            else:
-                stores.catalog.upsert_provider_mapping(
-                    instrument_id=instrument_id,
-                    provider=PROVIDER,
-                    provider_code=resolved_inst.provider_code,
-                    active_from=start,
-                )
-                pending_derived.discard(resolved_inst.provider_code)
-        if dry_run:
-            logger.info(
-                "yfinance dry-run ticker=%s instrument_id=%s points=%s",
-                resolved_inst.provider_code,
-                instrument_id,
-                len(frame.index),
+    if catch_up:
+        for inst in resolved:
+            req = YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code)
+            try:
+                start_i, end_i = _catchup_window(stores.columnar, inst.instrument_id, start, now)
+                frames = fetcher.timeseries_fetch_many([req], start_i, end_i)
+            except Exception:
+                for code in list(pending_derived):
+                    stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+                raise
+            frame = frames[0] if frames else pd.DataFrame()
+            _consume_frame(
+                stores=stores,
+                resolved_inst=inst,
+                frame=frame,
+                start=start_i,
+                dry_run=dry_run,
+                pending_derived=pending_derived,
             )
-            continue
-        _write_frame(stores.columnar, instrument_id, frame)
-        logger.info(
-            "yfinance stored ticker=%s instrument_id=%s points=%s",
-            resolved_inst.provider_code,
-            instrument_id,
-            len(frame.index),
-        )
+    else:
+        try:
+            frames = fetcher.timeseries_fetch_many(requests, start, end)
+        except Exception:
+            for code in list(pending_derived):
+                stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+            raise
+        for resolved_inst, frame in zip(resolved, frames):
+            _consume_frame(
+                stores=stores,
+                resolved_inst=resolved_inst,
+                frame=frame,
+                start=start,
+                dry_run=dry_run,
+                pending_derived=pending_derived,
+            )
+
     for code in list(pending_derived):
         stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=code)
+
+
+def _consume_frame(
+    *,
+    stores: StoreContainer,
+    resolved_inst: ResolvedInstrument,
+    frame: pd.DataFrame,
+    start: datetime,
+    dry_run: bool,
+    pending_derived: set[str],
+) -> None:
+    instrument_id = resolved_inst.instrument_id
+    if dry_run:
+        logger.info(
+            "yfinance dry-run ticker=%s instrument_id=%s points=%s",
+            resolved_inst.provider_code,
+            instrument_id,
+            len(frame.index) if frame is not None else 0,
+        )
+        if resolved_inst.derived:
+            stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=resolved_inst.provider_code)
+            pending_derived.discard(resolved_inst.provider_code)
+        return
+
+    if frame is None:
+        frame = pd.DataFrame()
+    if frame.empty:
+        if resolved_inst.derived:
+            stores.catalog.remove_provider_mapping(provider=PROVIDER, provider_code=resolved_inst.provider_code)
+            pending_derived.discard(resolved_inst.provider_code)
+        return
+
+    _write_frame(stores.columnar, instrument_id, frame)
+    logger.info(
+        "yfinance stored ticker=%s instrument_id=%s points=%s",
+        resolved_inst.provider_code,
+        instrument_id,
+        len(frame.index),
+    )
+    if resolved_inst.derived:
+        stores.catalog.upsert_provider_mapping(
+            instrument_id=instrument_id,
+            provider=PROVIDER,
+            provider_code=resolved_inst.provider_code,
+            active_from=start,
+        )
+        pending_derived.discard(resolved_inst.provider_code)
