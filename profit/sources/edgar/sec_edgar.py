@@ -10,6 +10,7 @@ provider-aware logging).
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, Mapping, Sequence
@@ -19,7 +20,7 @@ from profit.config import ProfitConfig, get_setting
 from profit.sources.batch_fetcher import BatchFetcher
 from profit.sources.types import Fingerprintable
 from profit.utils.url_fetcher import FetchFn, fetch_url
-from .common import SEC_UA_ENV, normalize_cik
+from .common import SEC_UA_ENV, normalize_cik, normalize_accession
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 SEC_PROVIDER_ID = "sec:edgar"
 SUBMISSIONS_URL_TMPL = "https://data.sec.gov/submissions/CIK{cik}.json"
 DEFAULT_TTL = timedelta(days=1)
+FILINGS_FIELDS = ("accessionNumber", "form", "filingDate", "primaryDocument", "reportDate")
 
 
 def _normalize_cik(raw: str | int) -> str:
@@ -112,6 +114,7 @@ class EdgarSubmissionsFetcher(BatchFetcher[EdgarSubmissionsRequest, EdgarSubmiss
         self.fetch_fn = fetch_fn
 
     def _download_bulk(self, request: EdgarSubmissionsRequest) -> EdgarSubmissions:  # type: ignore[override]
+        print("DOWNLOAD BULK")
         url = SUBMISSIONS_URL_TMPL.format(cik=request.cik)
         headers = {
             "User-Agent": self.user_agent,
@@ -126,7 +129,18 @@ class EdgarSubmissionsFetcher(BatchFetcher[EdgarSubmissionsRequest, EdgarSubmiss
             fetch_fn=self.fetch_fn,
         )
         data = json.loads(payload)
-        filings = _parse_recent_filings(data)
+
+        page_payloads = _fetch_paged_filings(
+            base_url=url,
+            base_payload=data,
+            cache=self.cache,
+            ttl=self.ttl,
+            allow_network=not self.offline,
+            headers=headers,
+            fetch_fn=self.fetch_fn,
+        )
+
+        filings = _parse_filings_with_pages([data] + page_payloads)
         logger.info(
             "edgar submissions fetched provider=%s cik=%s count=%s",
             SEC_PROVIDER_ID,
@@ -141,32 +155,79 @@ class EdgarSubmissionsFetcher(BatchFetcher[EdgarSubmissionsRequest, EdgarSubmiss
         )
 
 
-def _parse_recent_filings(data: Mapping[str, object]) -> list[EdgarFiling]:
-    filings = data.get("filings") or {}
-    if not isinstance(filings, Mapping):
+def _fetch_paged_filings(base_url: str, base_payload: Mapping[str, object], *, cache, ttl, allow_network: bool, headers, fetch_fn) -> list[Mapping[str, object]]:
+    """
+    Fetch paged filings listed under filings.files (e.g., CIKxxxx-001.json).
+    Returns a list of decoded JSON payloads; errors per page propagate.
+    """
+    filings = base_payload.get("filings") or {}
+    files = filings.get("files") or []
+    if not isinstance(files, list) or not files:
+        logger.info("edgar submissions has no paged filings files for %s", base_url)
         return []
-    recent = filings.get("recent") or {}
-    if not isinstance(recent, Mapping):
-        return []
-
-    accessions = _safe_list(recent.get("accessionNumber"))
-    forms = _safe_list(recent.get("form"))
-    filing_dates = _safe_list(recent.get("filingDate"))
-    primary_docs = _safe_list(recent.get("primaryDocument"))
-    report_dates = _safe_list(recent.get("reportDate"))
-
-    count = min(len(accessions), len(forms), len(filing_dates))
-    parsed: list[EdgarFiling] = []
-    for idx in range(count):
-        parsed.append(
-            EdgarFiling(
-                accession_number=accessions[idx],
-                form=forms[idx],
-                filing_date=_parse_yyyymmdd(filing_dates[idx]),
-                primary_document=primary_docs[idx] if idx < len(primary_docs) else None,
-                report_date=_parse_optional_date(report_dates, idx),
-            )
+    # Derive directory prefix from base_url.
+    prefix = base_url.rsplit("/", 1)[0] + "/"
+    pages: list[Mapping[str, object]] = []
+    fetched = 0
+    for entry in files:
+        if not isinstance(entry, Mapping):
+            continue
+        name = entry.get("name")
+        if not name:
+            continue
+        logger.info("edgar submissions fetching page file name=%s base=%s", name, base_url)
+        page_url = prefix + str(name)
+        page_payload = fetch_url(
+            page_url,
+            cache=cache,
+            ttl=ttl,
+            allow_network=allow_network,
+            headers=headers,
+            fetch_fn=fetch_fn,
         )
+        pages.append(json.loads(page_payload))
+        fetched += 1
+    logger.info("edgar submissions fetched %s paged filing file(s) for %s", fetched, base_url)
+    return pages
+
+
+def _parse_filings_with_pages(payloads: list[Mapping[str, object]]) -> list[EdgarFiling]:
+    """
+    Combine filings from the main submissions JSON plus any paged files listed
+    under filings.files. Keep first occurrence of an accession (newest first).
+    """
+    parsed: list[EdgarFiling] = []
+    seen: set[str] = set()
+    for data in payloads:
+        filings = data.get("filings") or {}
+        if not isinstance(filings, Mapping):
+            continue
+        recent = filings.get("recent") or {}
+        if not isinstance(recent, Mapping):
+            continue
+
+        accessions = _safe_list(recent.get("accessionNumber"))
+        forms = _safe_list(recent.get("form"))
+        filing_dates = _safe_list(recent.get("filingDate"))
+        primary_docs = _safe_list(recent.get("primaryDocument"))
+        report_dates = _safe_list(recent.get("reportDate"))
+
+        count = min(len(accessions), len(forms), len(filing_dates))
+        for idx in range(count):
+            acc = accessions[idx]
+            norm_acc = normalize_accession(acc)
+            if norm_acc in seen:
+                continue
+            seen.add(norm_acc)
+            parsed.append(
+                EdgarFiling(
+                    accession_number=acc,
+                    form=forms[idx],
+                    filing_date=_parse_yyyymmdd(filing_dates[idx]),
+                    primary_document=primary_docs[idx] if idx < len(primary_docs) else None,
+                    report_date=_parse_optional_date(report_dates, idx),
+                )
+            )
     return parsed
 
 

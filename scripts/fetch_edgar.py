@@ -164,7 +164,7 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
 
     cfg = _profit_cfg(args)
-    cache = FileCache(base_dir=cfg.cache_root / "edgar_fetcher")
+    cache = FileCache(base_dir=cfg.cache_root / "edgar_fetcher", ttl=timedelta(minutes=args.ttl_minutes))
     edgar_db = EdgarDatabase(cfg.data_root / "edgar.sqlite3")
     debug_dumps = args.debug_dumps
     ua = args.user_agent or get_setting("PROFIT_SEC_USER_AGENT")
@@ -229,15 +229,23 @@ def main() -> None:
         )
 
         req = EdgarSubmissionsRequest(args.cik)
+        print("FETCHING")
         result = fetcher.fetch(req)
         edgar_db.record_submissions(result.cik, result.entity_name, result.raw)
 
-        print(f"CIK: {result.cik}")
-        print(f"Entity: {result.entity_name}")
-        print(f"Recent filings: {len(result.recent_filings)}")
+        logging.info("CIK: %s", result.cik)
+        logging.info("Entity: %s", result.entity_name)
+        logging.info("Recent filings: %s", len(result.recent_filings))
         for filing in result.recent_filings[:10]:
             report = filing.report_date.isoformat() if filing.report_date else "-"
-            print(f"{filing.filing_date.isoformat()} {filing.form:6} {filing.accession_number} report={report} doc={filing.primary_document}")
+            logging.info(
+                "%s %s %s report=%s doc=%s",
+                filing.filing_date.isoformat(),
+                f"{filing.form:6}",
+                filing.accession_number,
+                report,
+                filing.primary_document,
+            )
 
         reader = EdgarAccessionReader(
             cache=cache,
@@ -261,7 +269,7 @@ def main() -> None:
             try:
                 acc = reader.fetch_index(result.cik, accession)
             except PermanentFetchError as exc:
-                print(f"Accession fetch failed ({exc.status}): {exc.url}")
+                logging.warning("Accession fetch failed (%s): %s", exc.status, exc.url)
                 return
 
             acc_base_url = acc.base_url
@@ -364,12 +372,12 @@ def main() -> None:
             _flush_attachment_links(accession)
 
         if args.accession:
-            print("\nAccession index:")
+            logging.info("Accession index:")
             _download_accession(args.accession)
         else:
-            print("\nDownloading accessions:")
+            logging.info("Downloading accessions:")
             for filing in result.recent_filings:
-                print(f"- {filing.accession_number} {filing.form} {filing.filing_date.isoformat()}")
+                logging.info("- %s %s %s", filing.accession_number, filing.form, filing.filing_date.isoformat())
                 _download_accession(filing.accession_number)
     finally:
         edgar_db.close()
