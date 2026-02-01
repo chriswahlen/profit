@@ -44,11 +44,12 @@ def test_parse_xbrl_converts_html_unparsed():
     parsed = parse_xbrl(HTML_XBRL)
     assert len(parsed.facts) == 1
     assert len(parsed.unparsed) == 1
-    assert "See **details** in *Appendix*." in parsed.unparsed[0]["text"]
+    # Without HTML conversion, tags are stripped to plain text.
+    assert "See details in Appendix." in parsed.unparsed[0]["text"]
 
 
 def test_parse_xbrl_converts_textblock_html():
     parsed = parse_xbrl(TEXTBLOCK_XBRL)
     assert len(parsed.unparsed) == 1
+    # Raw inner HTML retained
     assert "Line1" in parsed.unparsed[0]["text"]
-    assert "**" not in parsed.unparsed[0]["text"]  # simple paragraphs render to spacing

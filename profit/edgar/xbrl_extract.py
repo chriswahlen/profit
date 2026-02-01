@@ -132,6 +132,9 @@ def extract_finance_facts(
     """
 
     try:
+        # Quick sniff to avoid wasting time on non-XBRL XML or HTML masquerading as XML.
+        if b"<xbrli:xbrl" not in xml_bytes.lower():
+            return []
         root = ET.fromstring(xml_bytes)
     except ET.ParseError as exc:  # pragma: no cover - validated upstream
         logger.warning("invalid XML skipped file=%s err=%s", source_file, exc)

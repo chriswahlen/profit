@@ -8,16 +8,10 @@ import re
 from typing import Dict, List, Optional, Tuple
 from xml.etree import ElementTree as ET
 
-from profit.utils.html_to_md import html_to_markdown
-
 logger = logging.getLogger(__name__)
 
 
 HTML_SKIP_TAGS = {"b", "i", "span", "strong", "em", "u", "a", "p", "div", "br", "ul", "ol", "li"}
-
-
-def _looks_like_html(text: str) -> bool:
-    return "<" in text and ">" in text
 
 
 @dataclass(frozen=True)
@@ -78,10 +72,6 @@ def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
             inner_html = match.group(1).strip()
         if not inner_html:
             inner_html = text_raw
-        if _looks_like_html(inner_html) or "textblock" in tag.lower():
-            # If it looks like HTML or is an XBRL text block, render to markdown for readability.
-            text = html_to_markdown(inner_html)
-            logger.info("converted HTML to markdown for %s", tag)
         unit_ref = attrs.get("unitRef")
         decimals = attrs.get("decimals")
         context_ref = attrs.get("contextRef")
