@@ -63,7 +63,7 @@ def get_data_root() -> Path:
     raise RuntimeError("Data root not configured; set PROFIT_DATA_ROOT or use --data-root equivalent")
 
 
-def get_columnar_db_path(*, args=None, filename: str = "columnar.sqlite3") -> Path:
+def get_columnar_db_path(*, args=None, filename: str = "profit.sqlite3") -> Path:
     if args is not None and getattr(args, "store_path", None):
         return Path(args.store_path)
     return get_data_root() / filename
@@ -193,5 +193,5 @@ class ProfitConfig:
         return get_cache_root(args=args)
 
     @staticmethod
-    def resolve_columnar_db_path(*, args=None, filename: str = "columnar.sqlite3") -> Path:
+    def resolve_columnar_db_path(*, args=None, filename: str = "profit.sqlite3") -> Path:
         return get_columnar_db_path(args=args, filename=filename)

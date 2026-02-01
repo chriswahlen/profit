@@ -30,7 +30,7 @@ Key ideas:
 - Maintenance: the store opens SQLite in WAL mode (`journal_mode=WAL`, `synchronous=NORMAL`) and exposes `checkpoint()`, `optimize()`, and `vacuum()` helpers for periodic cleanup.
 
 ### Storage layout
-- Default path: `.cache/profit/columnar.sqlite3` (or `$PROFIT_CACHE_DIR/columnar.sqlite3`).
+- Default path: `.cache/profit/profit.sqlite3` (or `$PROFIT_CACHE_DIR/profit.sqlite3`).
 - Series metadata table: `__col_series__` (includes optional `provider_id` for the source that created/owns each series)
 - Slice table: `__col_slice__` with primary key `(series_id, start_index)`
 

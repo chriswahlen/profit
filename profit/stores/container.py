@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 from profit.cache.columnar_store import ColumnarSqliteStore
 from profit.catalog.entity_store import EntityStore
 from profit.catalog.store import CatalogStore
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_shared_conn(conn: sqlite3.Connection) -> sqlite3.Connection:
@@ -41,6 +44,8 @@ class StoreContainer:
         all three stores sharing the same connection.
         """
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path = db_path.resolve()
+        logger.info("opening store at %s", resolved_path)
         conn = sqlite3.connect(db_path)
         _configure_shared_conn(conn)
         entity = EntityStore(db_path, conn=conn)

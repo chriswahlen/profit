@@ -33,7 +33,8 @@ def main() -> None:
     ProfitConfig.apply_runtime_env(cfg)
 
     cache = FileCache(base_dir=cfg.cache_root / "yfinance_fetcher", ttl=timedelta(days=args.ttl_days))
-    stores = StoreContainer.open(cfg.store_path)
+    store_path = Path(cfg.store_path).resolve()
+    stores = StoreContainer.open(store_path)
 
     try:
         instrument_ids = [t.strip() for t in args.instrument_ids.split(",") if t.strip()]
