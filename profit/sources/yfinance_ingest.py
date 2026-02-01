@@ -23,6 +23,7 @@ from profit.catalog.types import InstrumentRecord
 from profit.config import ProfitConfig
 from profit.sources.yfinance import FIELD_ORDER, PROVIDER, YFinanceFetcher, YFinanceRequest
 from profit.stores.container import StoreContainer
+from profit.utils.market_calendar import adjust_end_to_last_session
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ DAY = timedelta(days=1)
 STEP_US = int(86_400_000_000)  # daily
 GRID_ORIGIN_US = int(datetime(1900, 1, 1, tzinfo=timezone.utc).timestamp() * 1_000_000)
 WINDOW_POINTS = 1095  # align with Stooq seeders (3 years per slice)
+US_MARKET_PREFIXES = ("XNAS|", "XNYS|")
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,7 @@ def _catchup_window(
     instrument_id: str,
     default_start: datetime,
     now: datetime,
+    end_adjust_fn=None,
 ) -> tuple[datetime, datetime, int]:
     """Return the window for catch-up fetches.
 
@@ -209,11 +212,22 @@ def _catchup_window(
             f"catch-up requires existing data for instrument_id={instrument_id}; none found"
         )
 
+    adjusted_end = end_adjust_fn(now) if end_adjust_fn else now
     latest_dt = datetime.fromtimestamp(latest_ts_us / 1_000_000, tz=timezone.utc)
-    start = latest_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    if start > now:
-        start = now
-    return start, now, latest_ts_us
+    start_day = (latest_dt + DAY).date()
+    end_day = adjusted_end.date()
+    if start_day > end_day:
+        # Already up to date; keep start=end to avoid invalid window.
+        start = datetime.combine(end_day, datetime.min.time(), tzinfo=timezone.utc)
+    else:
+        start = datetime.combine(start_day, datetime.min.time(), tzinfo=timezone.utc)
+    end = datetime.combine(end_day, datetime.min.time(), tzinfo=timezone.utc)
+    return start, end, latest_ts_us
+
+
+def _adjust_end_for_us_market(end: datetime) -> datetime:
+    # Avoid requesting future/closed market days for US equities.
+    return adjust_end_to_last_session(end, calendar_name="NYSE")
 
 
 def fetch_and_store_yfinance(
@@ -282,8 +296,23 @@ def fetch_and_store_yfinance(
         window_groups: dict[tuple[datetime, datetime], list[tuple[ResolvedInstrument, YFinanceRequest, int]]] = {}
         try:
             for inst in resolved:
-                start_i, end_i, last_ts_us = _catchup_window(stores.columnar, inst.instrument_id, start, now)
+                end_adjust = _adjust_end_for_us_market if inst.instrument_id.startswith(US_MARKET_PREFIXES) else None
+                start_i, end_i, last_ts_us = _catchup_window(
+                    stores.columnar,
+                    inst.instrument_id,
+                    start,
+                    now,
+                    end_adjust_fn=end_adjust,
+                )
                 req = YFinanceRequest(ticker=inst.provider_code, provider_code=inst.provider_code)
+                logger.info(
+                    "yfinance catch-up planning ticker=%s instrument_id=%s last_day=%s start=%s end=%s",
+                    inst.provider_code,
+                    inst.instrument_id,
+                    datetime.fromtimestamp(last_ts_us / 1_000_000, tz=timezone.utc).date().isoformat(),
+                    start_i.date().isoformat(),
+                    end_i.date().isoformat(),
+                )
                 window_groups.setdefault((start_i, end_i), []).append((inst, req, last_ts_us))
 
             for (start_i, end_i), group in window_groups.items():
