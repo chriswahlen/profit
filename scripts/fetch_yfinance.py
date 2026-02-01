@@ -13,7 +13,7 @@ from profit.stores import StoreContainer
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch yfinance OHLCV bars into the columnar store")
-    parser.add_argument("tickers", help="Comma-separated list of tickers (e.g., AAPL,MSFT,SPY)")
+    parser.add_argument("instrument_ids", help="Comma-separated canonical instrument_ids (e.g., XNAS|AAPL,XNYS|MSFT)")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD or ISO datetime, UTC assumed if naive)")
     parser.add_argument("--ttl-days", type=int, default=1, help="Cache TTL days (default 1)")
@@ -33,9 +33,9 @@ def main() -> None:
     try:
         start = _parse_date(args.start)
         end = _parse_date(args.end)
-        tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+        instrument_ids = [t.strip() for t in args.instrument_ids.split(",") if t.strip()]
         fetch_and_store_yfinance(
-            tickers=tickers,
+            instrument_ids=instrument_ids,
             start=start,
             end=end,
             cfg=cfg,

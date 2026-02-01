@@ -9,7 +9,7 @@ the network by swapping in a stubbed download_fn on the fetcher.
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Tuple
 
 import pandas as pd
 
@@ -20,13 +20,7 @@ from profit.catalog.refresher import CatalogChecker
 from profit.catalog.store import CatalogStore
 from profit.catalog.types import InstrumentRecord
 from profit.config import ProfitConfig
-from profit.sources.yfinance import (
-    DATASET,
-    FIELD_ORDER,
-    PROVIDER,
-    YFinanceFetcher,
-    YFinanceRequest,
-)
+from profit.sources.yfinance import DATASET, FIELD_ORDER, PROVIDER, YFinanceFetcher, YFinanceRequest
 from profit.stores.container import StoreContainer
 
 logger = logging.getLogger(__name__)
@@ -41,18 +35,55 @@ def _parse_date(val: str) -> datetime:
     return datetime.fromisoformat(val).replace(tzinfo=timezone.utc) if "T" not in val else datetime.fromisoformat(val).astimezone(timezone.utc)
 
 
-def _ensure_instruments_present(catalog: CatalogStore, tickers: Sequence[str]) -> dict[str, InstrumentRecord]:
-    missing = []
-    records: dict[str, InstrumentRecord] = {}
-    for ticker in tickers:
-        rec = catalog.get_instrument(provider=PROVIDER, provider_code=ticker)
+def _resolve_provider_codes(
+    catalog: CatalogStore, instrument_ids: Sequence[str]
+) -> list[Tuple[str, str, InstrumentRecord]]:
+    """
+    Given canonical instrument_ids, resolve to (instrument_id, provider_code, record).
+    Raises if any mapping is missing.
+    """
+    out: list[Tuple[str, str, InstrumentRecord]] = []
+    missing: list[str] = []
+    for inst in instrument_ids:
+        cur = catalog.conn.cursor()
+        cur.execute(
+            """
+            SELECT provider_code
+            FROM instrument_provider_map
+            WHERE instrument_id = ? AND provider = ?
+            LIMIT 1;
+            """,
+            (inst, PROVIDER),
+        )
+        row = cur.fetchone()
+        provider_code = row[0] if row else None
+        rec = catalog.get_instrument(provider=PROVIDER, provider_code=provider_code) if provider_code else None
         if rec is None:
-            missing.append(ticker)
-        else:
-            records[ticker] = rec
+            if "|" in inst:
+                fallback = inst.split("|", 1)[1].upper()
+                if provider_code != fallback:
+                    cur2 = catalog.conn.cursor()
+                    cur2.execute(
+                        """
+                        SELECT instrument_id
+                        FROM instrument_provider_map
+                        WHERE provider = ? AND provider_code = ?
+                        LIMIT 1;
+                        """,
+                        (PROVIDER, fallback),
+                    )
+                    if cur2.fetchone():
+                        rec = catalog.get_instrument(provider=PROVIDER, provider_code=fallback)
+                        provider_code = fallback
+        if rec is None or provider_code is None:
+            missing.append(inst)
+            continue
+        out.append((inst, provider_code, rec))
     if missing:
-        raise RuntimeError(f"Missing catalog instruments for provider={PROVIDER}: {', '.join(sorted(missing))}")
-    return records
+        raise RuntimeError(
+            "Missing yfinance provider mapping for instrument_id(s): " + ", ".join(sorted(set(missing)))
+        )
+    return out
 
 
 def _ensure_catalog_meta(catalog: CatalogStore, provider: str, now: datetime) -> None:
@@ -110,7 +141,7 @@ def _write_frame(store: ColumnarSqliteStore, instrument_id: str, frame: pd.DataF
 
 def fetch_and_store_yfinance(
     *,
-    tickers: Iterable[str],
+    instrument_ids: Iterable[str],
     start: datetime,
     end: datetime,
     cfg: ProfitConfig,
@@ -131,43 +162,26 @@ def fetch_and_store_yfinance(
     if start > end:
         raise ValueError("start must be <= end")
 
-    tickers = [t.strip().upper() for t in tickers if t.strip()]
-    if not tickers:
-        raise ValueError("at least one ticker is required")
+    instrument_ids = [t.strip() for t in instrument_ids if t.strip()]
+    if not instrument_ids:
+        raise ValueError("at least one instrument_id is required")
 
-    if dry_run:
-        records = {
-            t: InstrumentRecord(
-                instrument_id=f"DRYRUN|{t}",
-                instrument_type="equity",
-                provider=PROVIDER,
-                provider_code=t,
-                mic=None,
-                currency=None,
-                active_from=datetime(1900, 1, 1, tzinfo=timezone.utc),
-                active_to=None,
-                attrs={"dry_run": True},
-            )
-            for t in tickers
-        }
-        lifecycle = _AlwaysActiveLifecycleReader()
-        catalog_checker = _NoopCatalogChecker()
-    else:
-        records = _ensure_instruments_present(stores.catalog, tickers)
-        lifecycle = CatalogLifecycleReader(stores.catalog)
-        _ensure_catalog_meta(stores.catalog, PROVIDER, datetime.now(timezone.utc))
+    resolved = _resolve_provider_codes(stores.catalog, instrument_ids)
+    records = {inst: rec for inst, _pc, rec in resolved}
+    lifecycle = CatalogLifecycleReader(stores.catalog)
+    _ensure_catalog_meta(stores.catalog, PROVIDER, datetime.now(timezone.utc))
 
-        class _NoopRefresher:
-            def refresh(self, provider: str, *, allow_network: bool, use_cache_only: bool = False) -> None:
-                return
+    class _NoopRefresher:
+        def refresh(self, provider: str, *, allow_network: bool, use_cache_only: bool = False) -> None:
+            return
 
-        catalog_checker = CatalogChecker(
-            store=stores.catalog,
-            refresher=_NoopRefresher(),
-            max_age=ttl,
-            allow_network=not offline,
-            use_cache_only=offline,
-        )
+    catalog_checker = CatalogChecker(
+        store=stores.catalog,
+        refresher=_NoopRefresher(),
+        max_age=ttl,
+        allow_network=not offline,
+        use_cache_only=offline,
+    )
 
     fetcher = YFinanceFetcher(
         cfg=cfg,
@@ -179,23 +193,22 @@ def fetch_and_store_yfinance(
         download_fn=download_fn,
     )
 
-    requests = [YFinanceRequest(t) for t in tickers]
+    requests = [YFinanceRequest(ticker=pc, provider_code=pc) for _inst, pc, _rec in resolved]
     frames = fetcher.timeseries_fetch_many(requests, start, end)
 
-    for req, frame in zip(requests, frames):
-        rec = records[req.ticker]
+    for (instrument_id, pc, _rec), frame in zip(resolved, frames):
         if dry_run:
             logger.info(
                 "yfinance dry-run ticker=%s instrument_id=%s points=%s",
-                req.ticker,
-                rec.instrument_id,
+                pc,
+                instrument_id,
                 len(frame.index),
             )
             continue
-        _write_frame(stores.columnar, rec.instrument_id, frame)
+        _write_frame(stores.columnar, instrument_id, frame)
         logger.info(
             "yfinance stored ticker=%s instrument_id=%s points=%s",
-            req.ticker,
-            rec.instrument_id,
+            pc,
+            instrument_id,
             len(frame.index),
         )
