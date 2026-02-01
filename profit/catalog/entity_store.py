@@ -16,8 +16,14 @@ def _dt_to_str(dt: datetime) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
 
+def _date_to_str(dt: datetime) -> str:
+    return dt.date().isoformat()
+
 def _maybe_dt_to_str(dt: datetime | None) -> str | None:
     return _dt_to_str(dt) if dt is not None else None
+
+def _maybe_date_to_str(dt: datetime | None) -> str | None:
+    return _date_to_str(dt) if dt is not None else None
 
 
 def _str_to_dt(val: str) -> datetime:
@@ -246,7 +252,7 @@ class EntityStore:
                 r.record_id,
                 r.report_id,
                 r.report_key,
-                _dt_to_str(r.period_end),
+                _date_to_str(r.period_end),
             )
             cur.execute(
                 """
@@ -267,7 +273,7 @@ class EntityStore:
                     and existing["units"] == r.units
                     and existing["attrs"] == attrs_json
                     and existing["decimals"] == r.decimals
-                    and existing["period_start"] == _maybe_dt_to_str(r.period_start)
+                    and existing["period_start"] == _maybe_date_to_str(r.period_start)
                     and existing["dimensions_sig"] == r.dimensions_sig
                     and existing["is_consolidated"] == _bool_to_int(r.is_consolidated)
                     and existing["amendment_flag"] == _bool_to_int(r.amendment_flag)
@@ -306,7 +312,7 @@ class EntityStore:
                         new_asof,
                         attrs_json,
                         r.decimals,
-                        _maybe_dt_to_str(r.period_start),
+                        _maybe_date_to_str(r.period_start),
                         r.dimensions_sig,
                         _bool_to_int(r.is_consolidated),
                         _bool_to_int(r.amendment_flag),
@@ -331,8 +337,8 @@ class EntityStore:
                         r.record_id,
                         r.report_id,
                         r.report_key,
-                        _maybe_dt_to_str(r.period_start),
-                        _dt_to_str(r.period_end),
+                        _maybe_date_to_str(r.period_start),
+                        _date_to_str(r.period_end),
                         r.decimals,
                         r.dimensions_sig,
                         _bool_to_int(r.is_consolidated),

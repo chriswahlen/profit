@@ -87,7 +87,7 @@ def test_finance_fact_overwrite_requires_newer_asof(tmp_path):
             base_fact.record_id,
             base_fact.report_id,
             base_fact.report_key,
-            base_fact.period_end.isoformat(),
+            base_fact.period_end.date().isoformat(),
         ),
     ).fetchone()
     assert row["value"] == 110.0

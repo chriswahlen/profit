@@ -39,11 +39,11 @@ def _iter_accessions(
     """
     cur = db.conn.cursor()
 
-    # Base list of candidate accessions
+    # Base list of candidate accessions (keep raw strings as stored for file lookups).
     if accession:
         cur.execute(
             "SELECT accession, cik FROM edgar_accession WHERE accession = ?",
-            (normalize_accession(accession),),
+            (accession,),
         )
     elif cik:
         cur.execute(
@@ -59,7 +59,7 @@ def _iter_accessions(
             yield normalize_accession(acc), normalize_cik(ck)
         return
 
-    # Gather processed markers (by cik)
+    # Gather processed markers (by cik, normalized accession)
     processed: Set[Tuple[str, str]] = set()
     if cik:
         cur.execute(
@@ -72,10 +72,10 @@ def _iter_accessions(
         processed = {(normalize_cik(row[0]), normalize_accession(row[1])) for row in cur.fetchall()}
 
     for acc, ck in candidates:
-        key = (normalize_cik(ck), normalize_accession(acc))
-        if key in processed:
+        norm_key = (normalize_cik(ck), normalize_accession(acc))
+        if norm_key in processed:
             continue
-        yield key[1], key[0]
+        yield acc, normalize_cik(ck)
 
 
 def _resolve_entity(store: EntityStore, cik: str) -> str | None:
@@ -207,12 +207,14 @@ def _process_accession(
     filenames = db.get_accession_files(accession)
     written = 0
     facts: list[FinanceFactRecord] = []
+    xml_seen = 0
     for name in filenames:
         if should_skip_accession_file(accession, name):
             continue
         lower = name.lower()
         if not lower.endswith(".xml"):
             continue
+        xml_seen += 1
         payload = db.get_file(accession, name)
         if payload is None:
             continue
@@ -233,6 +235,10 @@ def _process_accession(
         )
 
     if not facts:
+        if xml_seen == 0:
+            logging.info("accession=%s has no XML files after filtering (files=%s)", accession, len(filenames))
+        else:
+            logging.info("accession=%s yielded no parseable numeric facts (files=%s xml_files=%s)", accession, len(filenames), xml_seen)
         return 0
 
     if dry_run:
@@ -250,7 +256,17 @@ def _process_accession(
             )
         return len(facts)
 
-    written = store.upsert_finance_facts(facts)
+    try:
+        written = store.upsert_finance_facts(facts)
+    except Exception as exc:
+        logging.error(
+            "failed to write facts accession=%s cik=%s count=%s error=%s",
+            accession,
+            cik,
+            len(facts),
+            exc,
+        )
+        raise
     _mark_processed(db, provider_entity_id, accession, written, report_id)
     logging.info("written facts=%s accession=%s", written, accession)
     return written
@@ -270,7 +286,11 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Reprocess even if accession was already extracted")
 
     args = parser.parse_args()
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(levelname)s %(message)s",
+        force=True,  # ensure output even if logging was configured elsewhere
+    )
 
     cfg = _profit_cfg(args)
     edgar_db_path = args.edgar_db or cfg.data_root / "edgar.sqlite3"
@@ -278,8 +298,20 @@ def main() -> None:
     _ensure_marker_table(edgar_db)
     store = EntityStore(cfg.store_path)
 
+    logging.info(
+        "extract_edgar_facts start cik=%s accession=%s dry_run=%s force=%s limit=%s edgar_db=%s store=%s",
+        args.cik,
+        args.accession,
+        args.dry_run,
+        args.force,
+        args.limit,
+        edgar_db_path,
+        cfg.store_path,
+    )
+
     asof = datetime.now(timezone.utc)
     count = 0
+    processed_any = False
     form_cache: dict[str, dict[str, str]] = {}
     filed_cache: dict[str, dict[str, datetime | None]] = {}
     for accession, cik in _iter_accessions(edgar_db, cik=args.cik, accession=args.accession, force=args.force):
@@ -304,7 +336,18 @@ def main() -> None:
         if args.dry_run or written > 0:
             logging.info("accession=%s facts_written=%s", accession, written)
         else:
-            logging.debug("accession=%s facts_written=%s", accession, written)
+            logging.info("accession=%s facts_written=%s", accession, written)
+        processed_any = True
+
+    if not processed_any:
+        logging.info(
+            "No accessions processed (filters=%s,%s, force=%s, limit=%s). "
+            "Likely already extracted or missing entity/files; try --force or relax filters.",
+            args.cik,
+            args.accession,
+            args.force,
+            args.limit,
+        )
 
     edgar_db.close()
     store.close()

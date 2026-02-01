@@ -18,6 +18,7 @@ from profit.catalog.types import FinanceFactRecord
 from profit.edgar.xml_parser import ParsedXbrl, parse_xbrl
 
 logger = logging.getLogger(__name__)
+INVALID_CONTEXT_LOG_LIMIT = 20
 
 
 # --- Parsed helpers ---------------------------------------------------------
@@ -43,16 +44,22 @@ class ParsedUnit:
 def _parse_date(val: str | None) -> datetime | None:
     if not val:
         return None
+    # XBRL should be date-only, but some vendors emit dateTime; normalize to date.
     try:
-        # XBRL dates are date-only; store as UTC midnight to keep comparisons sane.
-        return datetime.strptime(val, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
     except Exception:
-        return None
+        try:
+            dt = datetime.strptime(val, "%Y-%m-%d")
+        except Exception:
+            return None
+    date_part = dt.date()
+    return datetime.combine(date_part, datetime.min.time(), tzinfo=timezone.utc)
 
 
 def parse_contexts(root: ET.Element) -> Dict[str, ParsedContext]:
     contexts: Dict[str, ParsedContext] = {}
     ns_sep = "}"
+    invalid: list[str] = []
     for elem in root.findall(".//{http://www.xbrl.org/2003/instance}context"):
         ctx_id = elem.get("id")
         if not ctx_id:
@@ -72,7 +79,16 @@ def parse_contexts(root: ET.Element) -> Dict[str, ParsedContext]:
                 period_type = "duration"
                 period_start = _parse_date(start.text.strip()) if start.text else None
                 period_end = _parse_date(end.text.strip()) if end.text else None
+        if period_end is None:
+            invalid.append(ctx_id)
+            continue
         contexts[ctx_id] = ParsedContext(id=ctx_id, period_start=period_start, period_end=period_end, period_type=period_type)
+    if invalid:
+        logger.warning(
+            "xbrl contexts missing usable period_end count=%s examples=%s",
+            len(invalid),
+            invalid[:INVALID_CONTEXT_LOG_LIMIT],
+        )
     return contexts
 
 
@@ -133,12 +149,24 @@ def extract_finance_facts(
     """
 
     try:
-        # Quick sniff to avoid wasting time on non-XBRL XML or HTML masquerading as XML.
-        if b"<xbrli:xbrl" not in xml_bytes.lower():
-            return []
         root = ET.fromstring(xml_bytes)
     except ET.ParseError as exc:  # pragma: no cover - validated upstream
-        logger.warning("invalid XML skipped file=%s err=%s", source_file, exc)
+        logger.warning("invalid XML skipped accession=%s file=%s err=%s", accession, source_file, exc)
+        return []
+
+    def _has_xbrl(elem: ET.Element) -> bool:
+        tag = elem.tag.lower()
+        if tag.endswith("xbrl"):
+            return True
+        for child in elem.iter():
+            if child is elem:
+                continue
+            if child.tag.lower().endswith("xbrl"):
+                return True
+        return False
+
+    if not _has_xbrl(root):
+        logger.info("skip non-xbrl xml accession=%s file=%s", accession, source_file)
         return []
 
     contexts = parse_contexts(root)
@@ -149,6 +177,7 @@ def extract_finance_facts(
     for fact in parsed.facts:
         ctx = contexts.get(fact.context_ref or "")
         if ctx is None or ctx.period_end is None:
+            logger.debug("skip fact name=%s missing context_ref=%s", fact.name, fact.context_ref)
             continue  # cannot place the fact in time
         unit = units.get(fact.unit_ref or "")
         normalized_unit = _normalize_unit(unit.measures) if unit else None
