@@ -165,3 +165,45 @@ class EdgarDatabase:
             (accession,),
         )
         return [row["file_name"] for row in cur.fetchall()]
+
+    def known_accessions(self, cik: str) -> set[str]:
+        """Return the set of accession numbers already recorded for a CIK."""
+        cur = self.conn.execute("SELECT accession FROM edgar_accession WHERE cik = ?", (cik,))
+        return {row["accession"] for row in cur.fetchall()}
+
+    def has_accession(self, accession: str, *, cik: str | None = None) -> bool:
+        """Check whether an accession exists in the index table.
+
+        If ``cik`` is provided we scope the lookup, otherwise accession alone is
+        matched. This is mainly used by the fetch_edgar CLI to decide whether to
+        re-download an accession when ``--force`` is not specified.
+        """
+
+        if cik is None:
+            cur = self.conn.execute("SELECT 1 FROM edgar_accession WHERE accession = ? LIMIT 1", (accession,))
+        else:
+            cur = self.conn.execute(
+                "SELECT 1 FROM edgar_accession WHERE cik = ? AND accession = ? LIMIT 1", (cik, accession)
+            )
+        return cur.fetchone() is not None
+
+    def known_accessions(self, cik: str) -> set[str]:
+        """Return the set of accession numbers already recorded for a CIK."""
+        cur = self.conn.execute("SELECT accession FROM edgar_accession WHERE cik = ?", (cik,))
+        return {row["accession"] for row in cur.fetchall()}
+
+    def has_accession(self, accession: str, *, cik: str | None = None) -> bool:
+        """Check whether an accession exists in the index table.
+
+        If ``cik`` is provided we scope the lookup, otherwise accession alone is
+        matched. This is mainly used by the fetch_edgar CLI to decide whether to
+        re-download an accession when ``--force`` is not specified.
+        """
+
+        if cik is None:
+            cur = self.conn.execute("SELECT 1 FROM edgar_accession WHERE accession = ? LIMIT 1", (accession,))
+        else:
+            cur = self.conn.execute(
+                "SELECT 1 FROM edgar_accession WHERE cik = ? AND accession = ? LIMIT 1", (cik, accession)
+            )
+        return cur.fetchone() is not None

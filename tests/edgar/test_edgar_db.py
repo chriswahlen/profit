@@ -46,4 +46,10 @@ def test_edgar_db_records_accession_files(tmp_path):
     assert db.has_file("0000123456-00-000001", "a.htm")
     assert db.get_file("0000123456-00-000001", "a.htm") == payload
 
+    # Accessions helpers
+    assert db.has_accession("0000123456-00-000001")
+    assert db.has_accession("0000123456-00-000001", cik="0000123456")
+    assert not db.has_accession("0000123456-00-000002")
+    assert db.known_accessions("0000123456") == {"0000123456-00-000001"}
+
     db.close()

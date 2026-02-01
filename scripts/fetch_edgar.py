@@ -125,6 +125,7 @@ def main() -> None:
         "--accession",
         help="Optional accession number (e.g., 0000320193-24-000001) to fetch index.json for this CIK",
     )
+    parser.add_argument("--force", action="store_true", help="Re-download accessions even if already stored")
     parser.add_argument(
         "--cache-dir",
         type=Path,
@@ -180,97 +181,110 @@ def main() -> None:
             report = filing.report_date.isoformat() if filing.report_date else "-"
             print(f"{filing.filing_date.isoformat()} {filing.form:6} {filing.accession_number} report={report} doc={filing.primary_document}")
 
-        if args.accession:
-            print("\nAccession index:")
-            reader = EdgarAccessionReader(
-                cache=cache,
-                user_agent=ua,
-                ttl=timedelta(minutes=args.ttl_minutes),
-                allow_network=not args.offline,
-            )
+        reader = EdgarAccessionReader(
+            cache=cache,
+            user_agent=ua,
+            ttl=timedelta(minutes=args.ttl_minutes),
+            allow_network=not args.offline,
+        )
+
+        def _download_accession(accession: str) -> None:
+            if not args.force and edgar_db.has_accession(accession, cik=result.cik):
+                logging.info("skipping accession %s (already present); use --force to re-download", accession)
+                return
+
             try:
-                acc = reader.fetch_index(args.cik, args.accession)
+                acc = reader.fetch_index(result.cik, accession)
             except PermanentFetchError as exc:
                 print(f"Accession fetch failed ({exc.status}): {exc.url}")
-            else:
-                file_names: list[str] = []
-                for item in acc.files:
-                    if isinstance(item, dict):
-                        name = item.get("name")
-                    else:
-                        name = str(item)
-                    if not name or should_skip_accession_file(args.accession, name):
-                        logging.info("skipping %s", name or "<missing name>")
-                        continue
-                    file_names.append(name)
-                    print(f"- {name}")
-                filtered_file_names = _filter_out_xml_duplicates(file_names)
-                edgar_db.record_accession_index(result.cik, args.accession, acc.base_url, filtered_file_names)
+                return
 
-                stored_lower: set[str] = set()
-                future_xml_lower = {name.lower() for name in filtered_file_names if name.lower().endswith(".xml")}
-                for name in filtered_file_names:
-                    lower = name.lower()
-                    if edgar_db.has_file(args.accession, name):
-                        stored_lower.add(lower)
-                        continue
-                    if _should_skip_non_xml_due_to_xml(name, stored_lower, future_xml_lower):
-                        logging.info("skipping %s because %s exists", name, f"{name}.xml")
-                        continue
-                    if name.lower().endswith(".zip"):
-                        try:
-                            payload = reader.fetch_file(args.cik, args.accession, name)
-                        except PermanentFetchError as file_exc:
-                            logging.warning("skipping zip file due to fetch error %s %s", name, file_exc)
-                            continue
-                        expanded = expand_zip_archive(args.accession, payload)
-                        expanded_xml_lower = {entry_name.lower() for entry_name in expanded if entry_name.lower().endswith(".xml")}
-                        known_xml_lower = future_xml_lower | expanded_xml_lower
-                        for entry_name, entry_payload in expanded.items():
-                            lower_entry = entry_name.lower()
-                            if lower_entry in stored_lower:
-                                continue
-                            if _should_skip_non_xml_due_to_xml(entry_name, stored_lower, known_xml_lower):
-                                logging.info("dedup skipping %s (source=%s)", entry_name, name)
-                                continue
-                            if edgar_db.has_file(args.accession, entry_name):
-                                stored_lower.add(lower_entry)
-                                continue
-                            if entry_name.lower().endswith(".xml"):
-                                if debug_dumps:
-                                    _debug_dump(args.accession, entry_name, entry_payload, "before")
-                                entry_payload = markdown_textblocks(entry_payload)
-                                if debug_dumps:
-                                    _debug_dump(args.accession, entry_name, entry_payload, "after")
-                            elif entry_name.lower().endswith((".htm", ".html")):
-                                if debug_dumps:
-                                    _debug_dump(args.accession, entry_name, entry_payload, "before_html")
-                                entry_payload = convert_html_to_markdown_bytes(entry_name, entry_payload)
-                                if debug_dumps:
-                                    _debug_dump(args.accession, entry_name, entry_payload, "md")
-                            edgar_db.store_file(args.accession, entry_name, entry_payload)
-                            stored_lower.add(lower_entry)
-                        # Do not store the raw zip; we keep expanded files only.
-                        continue
+            file_names: list[str] = []
+            for item in acc.files:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                else:
+                    name = str(item)
+                if not name or should_skip_accession_file(accession, name):
+                    logging.info("skipping %s", name or "<missing name>")
+                    continue
+                file_names.append(name)
+            filtered_file_names = _filter_out_xml_duplicates(file_names)
+            edgar_db.record_accession_index(result.cik, accession, acc.base_url, filtered_file_names)
+
+            stored_lower: set[str] = set()
+            future_xml_lower = {name.lower() for name in filtered_file_names if name.lower().endswith(".xml")}
+            for name in filtered_file_names:
+                lower = name.lower()
+                if edgar_db.has_file(accession, name):
+                    stored_lower.add(lower)
+                    continue
+                if _should_skip_non_xml_due_to_xml(name, stored_lower, future_xml_lower):
+                    logging.info("skipping %s because %s exists", name, f"{name}.xml")
+                    continue
+                if name.lower().endswith(".zip"):
                     try:
-                        payload = reader.fetch_file(args.cik, args.accession, name)
+                        payload = reader.fetch_file(result.cik, accession, name)
                     except PermanentFetchError as file_exc:
-                        logging.warning("skipping file due to fetch error %s %s", name, file_exc)
+                        logging.warning("skipping zip file due to fetch error %s %s", name, file_exc)
                         continue
-                    if name.lower().endswith(".xml"):
-                        if debug_dumps:
-                            _debug_dump(args.accession, name, payload, "before")
-                        payload = markdown_textblocks(payload)
-                        if debug_dumps:
-                            _debug_dump(args.accession, name, payload, "after")
-                    elif name.lower().endswith((".htm", ".html")):
-                        if debug_dumps:
-                            _debug_dump(args.accession, name, payload, "before_html")
-                        payload = convert_html_to_markdown_bytes(name, payload)
-                        if debug_dumps:
-                            _debug_dump(args.accession, name, payload, "md")
-                    edgar_db.store_file(args.accession, name, payload)
-                    stored_lower.add(name.lower())
+                    expanded = expand_zip_archive(accession, payload)
+                    expanded_xml_lower = {entry_name.lower() for entry_name in expanded if entry_name.lower().endswith(".xml")}
+                    known_xml_lower = future_xml_lower | expanded_xml_lower
+                    for entry_name, entry_payload in expanded.items():
+                        lower_entry = entry_name.lower()
+                        if lower_entry in stored_lower:
+                            continue
+                        if _should_skip_non_xml_due_to_xml(entry_name, stored_lower, known_xml_lower):
+                            logging.info("dedup skipping %s (source=%s)", entry_name, name)
+                            continue
+                        if edgar_db.has_file(accession, entry_name):
+                            stored_lower.add(lower_entry)
+                            continue
+                        if entry_name.lower().endswith(".xml"):
+                            if debug_dumps:
+                                _debug_dump(accession, entry_name, entry_payload, "before")
+                            entry_payload = markdown_textblocks(entry_payload)
+                            if debug_dumps:
+                                _debug_dump(accession, entry_name, entry_payload, "after")
+                        elif entry_name.lower().endswith((".htm", ".html")):
+                            if debug_dumps:
+                                _debug_dump(accession, entry_name, entry_payload, "before_html")
+                            entry_payload = convert_html_to_markdown_bytes(entry_name, entry_payload)
+                            if debug_dumps:
+                                _debug_dump(accession, entry_name, entry_payload, "md")
+                        edgar_db.store_file(accession, entry_name, entry_payload)
+                        stored_lower.add(lower_entry)
+                    # Do not store the raw zip; we keep expanded files only.
+                    continue
+                try:
+                    payload = reader.fetch_file(result.cik, accession, name)
+                except PermanentFetchError as file_exc:
+                    logging.warning("skipping file due to fetch error %s %s", name, file_exc)
+                    continue
+                if name.lower().endswith(".xml"):
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "before")
+                    payload = markdown_textblocks(payload)
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "after")
+                elif name.lower().endswith((".htm", ".html")):
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "before_html")
+                    payload = convert_html_to_markdown_bytes(name, payload)
+                    if debug_dumps:
+                        _debug_dump(accession, name, payload, "md")
+                edgar_db.store_file(accession, name, payload)
+                stored_lower.add(name.lower())
+
+        if args.accession:
+            print("\nAccession index:")
+            _download_accession(args.accession)
+        else:
+            print("\nDownloading accessions:")
+            for filing in result.recent_filings:
+                print(f"- {filing.accession_number} {filing.form} {filing.filing_date.isoformat()}")
+                _download_accession(filing.accession_number)
     finally:
         edgar_db.close()
 
