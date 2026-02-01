@@ -10,6 +10,7 @@ from typing import Optional
 from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.edgar import EdgarDatabase
+from profit.edgar.attachments import is_attachment_filename, save_attachment
 from profit.edgar.zip_utils import expand_zip_archive
 from profit.edgar.xml_sanitizer import markdown_textblocks
 from profit.sources.edgar import convert_html_to_markdown_bytes
@@ -144,6 +145,11 @@ def main() -> None:
     )
     parser.add_argument("--ttl-minutes", type=int, default=1440, help="Cache TTL minutes (default 1440 = 1 day)")
     parser.add_argument("--offline", action="store_true", help="Use cache only; skip network")
+    parser.add_argument(
+        "--save-attachments",
+        action="store_true",
+        help="Write PDF/XLSX attachments to a temp folder even if already cached",
+    )
     parser.add_argument("--debug-dumps", action="store_true", help="Write pre/post-processing debug files to temp")
     parser.add_argument("--log-level", default="INFO", help="Logging level (default INFO)")
 
@@ -158,6 +164,7 @@ def main() -> None:
     if not ua:
         edgar_db.close()
         raise SystemExit("User-Agent required: set --user-agent or PROFIT_SEC_USER_AGENT")
+    attachment_dir = Path(tempfile.gettempdir()) / "edgar_attachments"
 
     try:
         fetcher = EdgarSubmissionsFetcher(
@@ -191,6 +198,12 @@ def main() -> None:
         def _download_accession(accession: str) -> None:
             if not args.force and edgar_db.has_accession(accession, cik=result.cik):
                 logging.info("skipping accession %s (already present); use --force to re-download", accession)
+                if args.save_attachments:
+                    for stored_name in edgar_db.get_accession_files(accession):
+                        if not is_attachment_filename(stored_name):
+                            continue
+                        payload = edgar_db.get_file(accession, stored_name)
+                        save_attachment(stored_name, payload, attachment_dir)
                 return
 
             try:
@@ -218,6 +231,9 @@ def main() -> None:
                 lower = name.lower()
                 if edgar_db.has_file(accession, name):
                     stored_lower.add(lower)
+                    if args.save_attachments:
+                        payload = edgar_db.get_file(accession, name)
+                        save_attachment(name, payload, attachment_dir)
                     continue
                 if _should_skip_non_xml_due_to_xml(name, stored_lower, future_xml_lower):
                     logging.info("skipping %s because %s exists", name, f"{name}.xml")
@@ -254,9 +270,11 @@ def main() -> None:
                             if debug_dumps:
                                 _debug_dump(accession, entry_name, entry_payload, "md")
                         edgar_db.store_file(accession, entry_name, entry_payload)
+                        if args.save_attachments:
+                            save_attachment(entry_name, entry_payload, attachment_dir)
                         stored_lower.add(lower_entry)
-                    # Do not store the raw zip; we keep expanded files only.
-                    continue
+                        # Do not store the raw zip; we keep expanded files only.
+                        continue
                 try:
                     payload = reader.fetch_file(result.cik, accession, name)
                 except PermanentFetchError as file_exc:
@@ -268,13 +286,15 @@ def main() -> None:
                     payload = markdown_textblocks(payload)
                     if debug_dumps:
                         _debug_dump(accession, name, payload, "after")
-                elif name.lower().endswith((".htm", ".html")):
-                    if debug_dumps:
-                        _debug_dump(accession, name, payload, "before_html")
-                    payload = convert_html_to_markdown_bytes(name, payload)
-                    if debug_dumps:
-                        _debug_dump(accession, name, payload, "md")
+                    elif name.lower().endswith((".htm", ".html")):
+                        if debug_dumps:
+                            _debug_dump(accession, name, payload, "before_html")
+                        payload = convert_html_to_markdown_bytes(name, payload)
+                        if debug_dumps:
+                            _debug_dump(accession, name, payload, "md")
                 edgar_db.store_file(accession, name, payload)
+                if args.save_attachments:
+                    save_attachment(name, payload, attachment_dir)
                 stored_lower.add(name.lower())
 
         if args.accession:
