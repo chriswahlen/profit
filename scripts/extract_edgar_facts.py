@@ -6,7 +6,7 @@ import argparse
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator, Tuple, List, Set
 
 from profit.catalog import EntityStore
 from profit.catalog.types import FinanceFactRecord
@@ -30,22 +30,52 @@ def _profit_cfg(args) -> ProfitConfig:
     )
 
 
-def _iter_accessions(db: EdgarDatabase, cik: str | None = None, accession: str | None = None) -> Iterable[str]:
+def _iter_accessions(
+    db: EdgarDatabase, cik: str | None = None, accession: str | None = None, *, force: bool = False
+) -> Iterator[Tuple[str, str]]:
+    """
+    Pull accessions for the (optional) cik/accession filters, then drop any
+    already marked in edgar_fact_extract unless force=True.
+    """
     cur = db.conn.cursor()
+
+    # Base list of candidate accessions
     if accession:
         cur.execute(
-            "SELECT accession FROM edgar_accession WHERE accession = ?",
+            "SELECT accession, cik FROM edgar_accession WHERE accession = ?",
             (normalize_accession(accession),),
         )
     elif cik:
         cur.execute(
-            "SELECT accession FROM edgar_accession WHERE cik = ? ORDER BY accession",
+            "SELECT accession, cik FROM edgar_accession WHERE cik = ? ORDER BY accession",
             (normalize_cik(cik),),
         )
     else:
-        cur.execute("SELECT accession FROM edgar_accession ORDER BY accession")
-    for row in cur.fetchall():
-        yield row[0]
+        cur.execute("SELECT accession, cik FROM edgar_accession ORDER BY accession")
+    candidates: List[Tuple[str, str]] = [(row[0], row[1]) for row in cur.fetchall()]
+
+    if force:
+        for acc, ck in candidates:
+            yield normalize_accession(acc), normalize_cik(ck)
+        return
+
+    # Gather processed markers (by cik)
+    processed: Set[Tuple[str, str]] = set()
+    if cik:
+        cur.execute(
+            "SELECT accession FROM edgar_fact_extract WHERE cik = ?",
+            (normalize_cik(cik),),
+        )
+        processed = {(normalize_cik(cik), normalize_accession(row[0])) for row in cur.fetchall()}
+    else:
+        cur.execute("SELECT cik, accession FROM edgar_fact_extract")
+        processed = {(normalize_cik(row[0]), normalize_accession(row[1])) for row in cur.fetchall()}
+
+    for acc, ck in candidates:
+        key = (normalize_cik(ck), normalize_accession(acc))
+        if key in processed:
+            continue
+        yield key[1], key[0]
 
 
 def _resolve_entity(store: EntityStore, cik: str) -> str | None:
@@ -96,29 +126,28 @@ def _load_source_url(db: EdgarDatabase, accession: str) -> dict[str, str | None]
     return {name: url for name, url in info}
 
 
-def _lookup_form(db: EdgarDatabase, cik: str, accession: str) -> str:
-    """Best-effort form lookup from stored submissions payload."""
+def _forms_for_cik(db: EdgarDatabase, cik: str) -> dict[str, str]:
+    """Return accession->form map for a cik."""
     cur = db.conn.execute("SELECT payload FROM edgar_submissions WHERE cik = ? LIMIT 1", (normalize_cik(cik),))
     row = cur.fetchone()
     if not row:
-        return "UNKNOWN"
+        return {}
     try:
         import json
 
         data = json.loads(row["payload"])
     except Exception:
-        return "UNKNOWN"
+        return {}
     filings = data.get("filings") or {}
     recent = filings.get("recent") or {}
     accessions = recent.get("accessionNumber") or []
     forms = recent.get("form") or []
-    norm_target = normalize_accession(accession)
+    mapping: dict[str, str] = {}
     for idx, acc in enumerate(accessions):
         norm_acc = normalize_accession(acc)
-        if norm_acc == norm_target:
-            if idx < len(forms):
-                return forms[idx] or "UNKNOWN"
-    return "UNKNOWN"
+        form = forms[idx] if idx < len(forms) else None
+        mapping[norm_acc] = form or "UNKNOWN"
+    return mapping
 
 
 def _process_accession(
@@ -130,6 +159,7 @@ def _process_accession(
     asof: datetime,
     dry_run: bool,
     force: bool,
+    form_map: dict[str, str],
 ) -> int:
     provider_entity_id = normalize_cik(cik)
     entity_id = _resolve_entity(store, provider_entity_id)
@@ -141,7 +171,7 @@ def _process_accession(
         logging.info("skip accession=%s (already processed); use --force to reprocess", accession)
         return 0
 
-    report_id = _lookup_form(db, provider_entity_id, accession)
+    report_id = form_map.get(normalize_accession(accession), "UNKNOWN")
     name_to_url = _load_source_url(db, accession)
     filenames = db.get_accession_files(accession)
     written = 0
@@ -218,20 +248,27 @@ def main() -> None:
 
     asof = datetime.now(timezone.utc)
     count = 0
-    for accession in _iter_accessions(edgar_db, cik=args.cik, accession=args.accession):
+    form_cache: dict[str, dict[str, str]] = {}
+    for accession, cik in _iter_accessions(edgar_db, cik=args.cik, accession=args.accession, force=args.force):
         count += 1
         if args.limit and count > args.limit:
             break
+        if cik not in form_cache:
+            form_cache[cik] = _forms_for_cik(edgar_db, cik)
         written = _process_accession(
             accession=accession,
-            cik=args.cik or edgar_db.conn.execute("SELECT cik FROM edgar_accession WHERE accession = ?", (accession,)).fetchone()[0],
+            cik=cik,
             db=edgar_db,
             store=store,
             asof=asof,
             dry_run=args.dry_run,
             force=args.force,
+            form_map=form_cache.get(cik, {}),
         )
-        logging.info("accession=%s facts_written=%s", accession, written)
+        if args.dry_run or written > 0:
+            logging.info("accession=%s facts_written=%s", accession, written)
+        else:
+            logging.debug("accession=%s facts_written=%s", accession, written)
 
     edgar_db.close()
     store.close()
