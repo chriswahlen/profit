@@ -24,6 +24,59 @@ from profit.catalog.refresher import CatalogChecker
 from profit.utils.url_fetcher import PermanentFetchError
 
 
+def _xml_counterparts(name: str) -> list[str]:
+    lower = name.lower()
+    if not lower:
+        return []
+    variants = []
+    if lower.endswith(".htm"):
+        base = lower[:-4]
+        variants.append(f"{base}_htm.xml")
+    if lower.endswith(".html"):
+        base = lower[:-5]
+        variants.append(f"{base}_html.xml")
+    variants.append(f"{lower}.xml")
+    return variants
+
+
+def _should_skip_non_xml_due_to_xml(name: str, stored_lower: set[str], future_xml_lower: set[str]) -> bool:
+    lower = name.lower()
+    if not lower or lower.endswith(".xml"):
+        return False
+    for counterpart in _xml_counterparts(lower):
+        if counterpart in stored_lower or counterpart in future_xml_lower:
+            return True
+    return False
+
+
+def _has_xml_counterpart(name: str, known_lower: set[str]) -> bool:
+    if not name:
+        return False
+    lower = name.lower()
+    if lower.endswith(".xml"):
+        return False
+    for variant in _xml_counterparts(lower):
+        if variant in known_lower:
+            return True
+    return False
+
+
+def _filter_out_xml_duplicates(file_names: list[str]) -> list[str]:
+    normalized = {name.lower() for name in file_names if name}
+    filtered: list[str] = []
+    for name in file_names:
+        if not name:
+            continue
+        match = None
+        if _has_xml_counterpart(name, normalized):
+            match = next((variant for variant in _xml_counterparts(name) if variant in normalized), None)
+        if match:
+            logging.info("skipping index entry %s because %s exists", name, match)
+            continue
+        filtered.append(name)
+    return filtered
+
+
 class _AlwaysActiveLifecycle(LifecycleReader):
     def get_lifecycle(self, provider: str, provider_code: str):
         # Accept any window; EDGAR submissions are effectively append-only.
@@ -90,6 +143,7 @@ def main() -> None:
     )
     parser.add_argument("--ttl-minutes", type=int, default=1440, help="Cache TTL minutes (default 1440 = 1 day)")
     parser.add_argument("--offline", action="store_true", help="Use cache only; skip network")
+    parser.add_argument("--debug-dumps", action="store_true", help="Write pre/post-processing debug files to temp")
     parser.add_argument("--log-level", default="INFO", help="Logging level (default INFO)")
 
     args = parser.parse_args()
@@ -98,6 +152,7 @@ def main() -> None:
     cfg = _profit_cfg(args)
     cache = FileCache(base_dir=cfg.cache_root / "edgar_fetcher")
     edgar_db = EdgarDatabase(cfg.data_root / "edgar.sqlite3")
+    debug_dumps = args.debug_dumps
     ua = args.user_agent or get_setting("PROFIT_SEC_USER_AGENT")
     if not ua:
         edgar_db.close()
@@ -149,11 +204,18 @@ def main() -> None:
                         continue
                     file_names.append(name)
                     print(f"- {name}")
-                edgar_db.record_accession_index(result.cik, args.accession, acc.base_url, file_names)
+                filtered_file_names = _filter_out_xml_duplicates(file_names)
+                edgar_db.record_accession_index(result.cik, args.accession, acc.base_url, filtered_file_names)
 
-                existing_names = set(file_names)
-                for name in file_names:
+                stored_lower: set[str] = set()
+                future_xml_lower = {name.lower() for name in filtered_file_names if name.lower().endswith(".xml")}
+                for name in filtered_file_names:
+                    lower = name.lower()
                     if edgar_db.has_file(args.accession, name):
+                        stored_lower.add(lower)
+                        continue
+                    if _should_skip_non_xml_due_to_xml(name, stored_lower, future_xml_lower):
+                        logging.info("skipping %s because %s exists", name, f"{name}.xml")
                         continue
                     if name.lower().endswith(".zip"):
                         try:
@@ -162,21 +224,32 @@ def main() -> None:
                             logging.warning("skipping zip file due to fetch error %s %s", name, file_exc)
                             continue
                         expanded = expand_zip_archive(args.accession, payload)
+                        expanded_xml_lower = {entry_name.lower() for entry_name in expanded if entry_name.lower().endswith(".xml")}
+                        known_xml_lower = future_xml_lower | expanded_xml_lower
                         for entry_name, entry_payload in expanded.items():
-                            already_seen = entry_name in existing_names or edgar_db.has_file(args.accession, entry_name)
-                            if already_seen:
+                            lower_entry = entry_name.lower()
+                            if lower_entry in stored_lower:
+                                continue
+                            if _should_skip_non_xml_due_to_xml(entry_name, stored_lower, known_xml_lower):
                                 logging.info("dedup skipping %s (source=%s)", entry_name, name)
                                 continue
+                            if edgar_db.has_file(args.accession, entry_name):
+                                stored_lower.add(lower_entry)
+                                continue
                             if entry_name.lower().endswith(".xml"):
-                                _debug_dump(args.accession, entry_name, entry_payload, "before")
+                                if debug_dumps:
+                                    _debug_dump(args.accession, entry_name, entry_payload, "before")
                                 entry_payload = markdown_textblocks(entry_payload)
-                                _debug_dump(args.accession, entry_name, entry_payload, "after")
+                                if debug_dumps:
+                                    _debug_dump(args.accession, entry_name, entry_payload, "after")
                             elif entry_name.lower().endswith((".htm", ".html")):
-                                _debug_dump(args.accession, entry_name, entry_payload, "before_html")
+                                if debug_dumps:
+                                    _debug_dump(args.accession, entry_name, entry_payload, "before_html")
                                 entry_payload = convert_html_to_markdown_bytes(entry_name, entry_payload)
-                                _debug_dump(args.accession, entry_name, entry_payload, "md")
+                                if debug_dumps:
+                                    _debug_dump(args.accession, entry_name, entry_payload, "md")
                             edgar_db.store_file(args.accession, entry_name, entry_payload)
-                            existing_names.add(entry_name)
+                            stored_lower.add(lower_entry)
                         # Do not store the raw zip; we keep expanded files only.
                         continue
                     try:
@@ -185,14 +258,19 @@ def main() -> None:
                         logging.warning("skipping file due to fetch error %s %s", name, file_exc)
                         continue
                     if name.lower().endswith(".xml"):
-                        _debug_dump(args.accession, name, payload, "before")
+                        if debug_dumps:
+                            _debug_dump(args.accession, name, payload, "before")
                         payload = markdown_textblocks(payload)
-                        _debug_dump(args.accession, name, payload, "after")
+                        if debug_dumps:
+                            _debug_dump(args.accession, name, payload, "after")
                     elif name.lower().endswith((".htm", ".html")):
-                        _debug_dump(args.accession, name, payload, "before_html")
+                        if debug_dumps:
+                            _debug_dump(args.accession, name, payload, "before_html")
                         payload = convert_html_to_markdown_bytes(name, payload)
-                        _debug_dump(args.accession, name, payload, "md")
+                        if debug_dumps:
+                            _debug_dump(args.accession, name, payload, "md")
                     edgar_db.store_file(args.accession, name, payload)
+                    stored_lower.add(name.lower())
     finally:
         edgar_db.close()
 
