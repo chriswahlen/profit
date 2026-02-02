@@ -36,16 +36,24 @@ store in the repo.
 
 The response from the agent should return a JSON blob consistent with our API definition in the
 response. Validate against the JSON schema (canonical IDs, UTC dates, inclusive end date, JSON null
-for open bounds, aggregation arrays) and reject on any mismatch; log a concise warning with provider,
-symbol/region, and window when rejecting.
+for open bounds, aggregation arrays) and reject on any mismatch; log a concise warning with
+provider, symbol/region, and window when rejecting.
 
-For invalid or partial replies, log structured details: warn when validation fails, emit INFO entries for empty/zero-point responses (include provider/exchange and requested window), and capture structured error codes/messages whenever retrievers cannot fulfill a request. Tie these logs to the prompt/response snippets (temp files for anything >4 KB) and include the derived next-step plan (which retrievers/filters to run or whether we're returning directly to the user).
+If you modify this agent flow (new retriever types, snippet behavior, validation rules, logging
+contracts), update `planner.md` too so the live prompt reflects the new requirements.
 
-If the agent signals that a new research snippet should be stored (e.g., via a `snippet` request with
-`action: "store"`), validate the snippet schema (title, body, normalized tags, related instruments/regions,
-timestamps) before persisting. When snippets are retrieved, summarize the matches in the next prompt
-and mention their `snippet_id`s so the Agent can reference or build on them. Log both snippet stores
-and lookups (with prompt/response persistence if large), including why each snippet was picked.
+For invalid or partial replies, log structured details: warn when validation fails, emit INFO
+entries for empty/zero-point responses (include provider/exchange and requested window), and
+capture structured error codes/messages whenever retrievers cannot fulfill a request. Tie these
+logs to the prompt/response snippets (temp files for anything >4 KB) and include the derived
+next-step plan (which retrievers/filters to run or whether we're returning directly to the user).
+
+If the agent signals that a new research snippet should be stored (e.g., via a `snippet` request
+with `action: "store"`), validate the snippet schema (title, body, normalized tags, related
+instruments/regions, timestamps) before persisting. When snippets are retrieved, summarize the
+matches in the next prompt and mention their `snippet_id`s so the Agent can reference or build on
+them. Log both snippet stores and lookups (with prompt/response persistence if large), including why
+each snippet was picked.
 
 If the JSON response contains data requests, we will launch the retrievers to fetch the data, and
 repeat the request with the instructions, the requested data, and the "agent_response" given by
@@ -64,3 +72,8 @@ the user.
 
 Add a small guardrail loop: cap iterations to avoid infinite back-and-forth; when the cap is hit,
 surface a clear error to the user and include the most recent agent_response for context.
+
+## Prompt usage
+
+Seed each turn with `planner.md` plus user context (and snippet summaries if retrieved). Embed the
+planner text verbatim before you ask for new instruction.

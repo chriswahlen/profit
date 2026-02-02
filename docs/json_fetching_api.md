@@ -122,6 +122,7 @@ Notes:
 - Use JSON `null` (not the string `"null"`) when a bound is open-ended.
 - End dates are inclusive; all times are normalized to UTC while preserving original timezone metadata in downstream payloads where available.
 - Aggregations accept an array of keywords (see Definitions); responses should make clear which aggregation produced each value (e.g., separate columns or keyed objects).
+- When you change anything in this document (fields, schemas, snippet behavior, etc.), also update `planner.md` so the agent prompt stays current.
 
 ## Research snippets
 
