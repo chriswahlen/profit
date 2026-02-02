@@ -43,6 +43,14 @@ If the JSON response contains data requests, we will launch the retrievers to fe
 repeat the request with the instructions, the requested data, and the "agent_response" given by
 the Agent.
 
+Always log the prompt we actually sent to the Agent (initial instructions + user request). If the
+prompt exceeds a few kilobytes (≈4 KB), write it to a temporary file, log the file path, and log
+only a concise snippet (e.g., first and last 200 characters) in the main log line. Apply the same
+guidance to the Agent’s response: log the full text when it’s short, otherwise persist it to a temp
+file and reference that path plus a snippet. Include in the log what we understood from the
+response (e.g., “invoke `market` retriever for `XNAS|AAPL` with fields open/close, 7d_avg window”,
+or “return final response to user”), so that downstream debugging can reconstruct the decision.
+
 If there are no more data requests, we are done and we give the "agent_response" directly back to 
 the user.
 

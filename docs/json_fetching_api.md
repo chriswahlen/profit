@@ -50,6 +50,13 @@ This API is the "language" the Agent can use to tell us what kind of data to fet
 
 For `company_facts` requests, provide the desired `filings` (e.g., `10-K`, `10-Q`) and period window. Fields should map to explicit Base Schema keys; missing fields should be treated as error responses unless explicitly allowed by the agent.
 
+### Error handling expectations
+
+- If an agent requests an unsupported instrument class or field, or if the requested window falls outside cached coverage, the retriever should raise a descriptive validation exception before making network calls. The exception should include the offending key (`instrument`, `field`, `region`, etc.) and log at WARN with provider/context metadata; no silent fallbacks.
+- When a provider returns empty or zero-point payloads, log at INFO (`empty series`) with provider/exchange and requested window; return an empty-but-valid response so the agent can decide whether to retry or move on.
+- If partial data is available (some instruments/fields succeed, others fail), return success for the available subset and surface structured warnings identifying the missing segments so the agent can request replacements or drop them explicitly.
+- Always surface structured errors (e.g., `{"error_code":"unsupported_field","field":"avg_spread","message":"Provider X does not support depth metrics"}`) back to the agent if data cannot be returned; log the same structured message on the fetcher side.
+
 ## Request Envelope
 
 The Agent response can have one request envelope per response.
