@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 def _to_iso(ts: datetime | None) -> str | None:
     if ts is None:
         return None
-    return ts.isoformat() + "Z"
+    return ts.astimezone(timezone.utc).isoformat()
 
 
 class SnippetStore:
@@ -54,7 +54,7 @@ class SnippetStore:
 
     def store_snippet(self, snippet: dict) -> dict:
         snippet_id = snippet.get("snippet_id") or f"snippet-{uuid4().hex}"
-        created = snippet.get("created_at") or _to_iso(datetime.utcnow())
+        created = snippet.get("created_at") or _to_iso(datetime.now(timezone.utc))
         expires = snippet.get("expires_at")
         body = snippet["body"]
         tags = snippet["tags"]
@@ -110,7 +110,7 @@ class SnippetStore:
             rows = cursor.fetchall()
 
         results: list[dict] = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for row in rows:
             record = dict(row)
             record_body = json.loads(record["body"])
