@@ -51,6 +51,7 @@ def test_reports_missing_data(tmp_path: Path) -> None:
     result = retriever.fetch(request)
     assert result.data_needs
     assert "MISSING" in result.data_needs[0]["name"]
+    assert result.data_needs[0]["error_code"] == "missing_data"
 
 
 def test_combines_multiple_series_for_same_instrument(tmp_path: Path) -> None:

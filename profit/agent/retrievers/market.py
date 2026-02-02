@@ -37,6 +37,9 @@ class MarketRetriever(BaseRetriever):
                             "name": f"{instrument}|{field}",
                             "reason": "no data available for requested window",
                             "criticality": "high",
+                            "error_code": "missing_data",
+                            "instrument": instrument,
+                            "field": field,
                         }
                     )
                     continue

@@ -62,6 +62,7 @@ def test_reports_missing_company(tmp_path: Path) -> None:
     }
     result = retriever.fetch(request)
     assert result.data_needs
+    assert result.data_needs[0]["error_code"] == "entity_not_found"
 
 
 def test_filters_facts_by_lowercase_filings(tmp_path: Path) -> None:

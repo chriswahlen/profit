@@ -68,6 +68,8 @@ class RealEstateRetriever(BaseRetriever):
                         "name": region,
                         "reason": "no real estate metrics in requested window",
                         "criticality": "medium",
+                        "error_code": "region_no_data",
+                        "region": region,
                     }
                 )
                 continue

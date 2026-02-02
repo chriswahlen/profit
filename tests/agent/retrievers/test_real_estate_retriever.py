@@ -74,6 +74,7 @@ def test_reports_missing_region(tmp_path: Path) -> None:
     result = retriever.fetch(request)
     assert result.data_needs
     assert "missing" in result.data_needs[0]["name"]
+    assert result.data_needs[0]["error_code"] == "region_no_data"
 
 
 def test_returns_multiple_regions_and_reports_missing(tmp_path: Path) -> None:

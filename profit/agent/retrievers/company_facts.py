@@ -40,6 +40,8 @@ class CompanyFactsRetriever(BaseRetriever):
                         "name": company,
                         "reason": "entity not found",
                         "criticality": "high",
+                        "error_code": "entity_not_found",
+                        "company": company,
                     }
                 )
                 continue
@@ -60,6 +62,9 @@ class CompanyFactsRetriever(BaseRetriever):
                         "name": company,
                         "reason": "no finance facts for requested fields",
                         "criticality": "medium",
+                        "error_code": "fields_missing",
+                        "company": company,
+                        "fields": [field.get("key") for field in request.get("fields") or [] if field.get("key")],
                     }
                 )
                 continue
