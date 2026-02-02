@@ -14,6 +14,9 @@ implementations:
 - The first is a stub wrapper that will serve back canned data. It'll have a map of text keywords
 to canned response that can be set either by dry-run clients, or by unit tests.
 - The second is a real wrapper around OpenAI's API. Default to using gpt-5-nano.
+  Allow overriding the model name (e.g., gpt-5-nano, gpt-4o) and other call parameters
+  (temperature, max tokens, stop sequences, retry policy) through config or explicit kwargs so
+  users can tune agent behavior while tests can pin deterministic settings.
 
 ### Data Fetching API
 
@@ -31,8 +34,10 @@ We take an initial prompt from the user, and append this prompt to an initial se
 for the Agent on how to use our API. This initial instruction set lives in a canned response we
 store in the repo.
 
-The response from the agent should return a JSON blob consistent withour API definition in the
-response. If it does not, immediately return an exception and stop the program.
+The response from the agent should return a JSON blob consistent with our API definition in the
+response. Validate against the JSON schema (canonical IDs, UTC dates, inclusive end date, JSON null
+for open bounds, aggregation arrays) and reject on any mismatch; log a concise warning with provider,
+symbol/region, and window when rejecting.
 
 If the JSON response contains data requests, we will launch the retrievers to fetch the data, and
 repeat the request with the instructions, the requested data, and the "agent_response" given by
@@ -40,3 +45,6 @@ the Agent.
 
 If there are no more data requests, we are done and we give the "agent_response" directly back to 
 the user.
+
+Add a small guardrail loop: cap iterations to avoid infinite back-and-forth; when the cap is hit,
+surface a clear error to the user and include the most recent agent_response for context.
