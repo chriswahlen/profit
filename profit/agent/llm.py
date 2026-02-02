@@ -108,7 +108,7 @@ def _plan_prompt_options(client, model: str, question: Question, plan: Retrieval
     Ask the LLM to propose formatting options (max_points). Decimals are fixed in code.
     If it fails, fall back to defaults.
     """
-    default = {"max_points": 30}
+    default = {"max_points": 365}
     try:
         summary = {
             "source": plan.source,

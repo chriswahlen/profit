@@ -19,13 +19,14 @@ class SourceRequest:
     start: Optional[date] = None
     end: Optional[date] = None
     notes: Optional[str] = None
-    max_points: int = 30
+    max_points: int = 365
     aggregations: Sequence[str] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
 class PlannerDecision:
     sources: List[SourceRequest]
+    next_sources: List[SourceRequest]
     answer_prompt: str
 
 
@@ -78,35 +79,15 @@ def interpret_planner_output(raw: Any) -> PlannerDecision:
     sources_raw = data.get("sources") or []
     if not isinstance(sources_raw, list):
         raise ValueError("sources must be a list")
-    sources: List[SourceRequest] = []
-    for entry in sources_raw:
-        if not isinstance(entry, dict):
-            continue
-        source = _validate_source(str(entry.get("source", "unknown")))
-        instruments = tuple(_clean_list(entry.get("instruments")))
-        regions = tuple(_clean_list(entry.get("regions")))
-        filings = tuple(_clean_list(entry.get("filings")))
-        start = _parse_date(entry.get("start"))
-        end = _parse_date(entry.get("end"))
-        notes = entry.get("notes")
-        max_points = int(entry.get("max_points", 30) or 30)
-        aggs = tuple(_validate_aggs(_clean_list(entry.get("aggregations"))))
-        sources.append(
-            SourceRequest(
-                source=source,
-                instruments=instruments,
-                regions=regions,
-                filings=filings,
-                start=start,
-                end=end,
-                notes=notes,
-                max_points=max_points,
-                aggregations=aggs,
-            )
-        )
+    sources: List[SourceRequest] = [_parse_source(entry) for entry in sources_raw if isinstance(entry, dict)]
+
+    next_raw = data.get("next_sources") or []
+    if not isinstance(next_raw, list):
+        next_raw = []
+    next_sources = [_parse_source(entry) for entry in next_raw if isinstance(entry, dict)]
 
     answer_prompt = data.get("answer_prompt") or ""
-    return PlannerDecision(sources=sources, answer_prompt=answer_prompt)
+    return PlannerDecision(sources=sources, next_sources=next_sources, answer_prompt=answer_prompt)
 
 
 JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -123,3 +104,26 @@ def extract_planner_json(text: str) -> PlannerDecision:
         raise ValueError("No JSON object found in LLM response")
     blob = match.group(0)
     return interpret_planner_output(blob)
+
+
+def _parse_source(entry: dict) -> SourceRequest:
+    source = _validate_source(str(entry.get("source", "unknown")))
+    instruments = tuple(_clean_list(entry.get("instruments")))
+    regions = tuple(_clean_list(entry.get("regions")))
+    filings = tuple(_clean_list(entry.get("filings")))
+    start = _parse_date(entry.get("start"))
+    end = _parse_date(entry.get("end"))
+    notes = entry.get("notes")
+    max_points = int(entry.get("max_points", 30) or 30)
+    aggs = tuple(_validate_aggs(_clean_list(entry.get("aggregations"))))
+    return SourceRequest(
+        source=source,
+        instruments=instruments,
+        regions=regions,
+        filings=filings,
+        start=start,
+        end=end,
+        notes=notes,
+        max_points=max_points,
+        aggregations=aggs,
+    )

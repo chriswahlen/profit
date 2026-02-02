@@ -6,12 +6,14 @@ def test_extract_planner_json_from_text():
     Sure, here's the plan:
     {
       "sources": [{"source": "prices", "instruments": ["AAPL"]}],
+      "next_sources": [{"source": "redfin", "regions": ["Seattle"]}],
       "answer_prompt": "Use DATA to summarize."
     }
     """
     decision = extract_planner_json(text)
     assert decision.sources[0].source == "prices"
     assert decision.answer_prompt.startswith("Use DATA")
+    assert decision.next_sources[0].source == "redfin"
 
 
 def test_extract_planner_json_raises_on_missing():

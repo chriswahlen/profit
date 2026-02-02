@@ -29,6 +29,7 @@ def test_interpret_planner_output_basic():
     assert src.max_points == 40
     assert src.aggregations == ("7d_avg", "weekly")
     assert decision.answer_prompt.startswith("Use DATA")
+    assert decision.next_sources == []
 
 
 def test_interpret_planner_output_filters_invalid():
@@ -48,3 +49,4 @@ def test_interpret_planner_output_filters_invalid():
     decision = interpret_planner_output(raw)
     assert decision.sources[0].aggregations == ("weekly",)
     assert decision.sources[1].source == "unknown"
+    assert decision.next_sources == []

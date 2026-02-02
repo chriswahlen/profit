@@ -15,7 +15,7 @@ def build_messages(
     today: date | None = None,
     plan_opts: dict | None = None,
 ) -> list[dict]:
-    plan_opts = plan_opts or {"max_points": 30, "decimals": 4}
+    plan_opts = plan_opts or {"max_points": 365, "decimals": 4}
     today = today or date.today()
     system = (
         "You are a data-bound assistant. "
