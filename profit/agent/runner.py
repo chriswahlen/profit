@@ -56,12 +56,6 @@ class AgentRunner:
             sections.append(f"DATA:\n{extra_data_block}")
 
         question_lines = [f"Question:\n{question.text}"]
-        if question.start or question.end:
-            question_lines.append(
-                f"Start: {question.start.isoformat() if question.start else 'null'}\n"
-                f"End: {question.end.isoformat() if question.end else 'null'}"
-            )
-
         if question.hints:
             question_lines.append(f"Hints: {', '.join(question.hints)}")
 

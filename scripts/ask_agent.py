@@ -1,67 +1,67 @@
 #!/usr/bin/env python
+"""Simple CLI for driving the planner-based agent."""
+
 from __future__ import annotations
 
 import argparse
-import sys
 import logging
-from datetime import date
 from pathlib import Path
+from typing import Sequence
 
-from profit.agent.llm import ChatGPTLLM, StubLLM
-from profit.agent.router import Router
-from profit.agent.types import Question
-from profit.agent import retrievers
-from profit.cache.columnar_store import ColumnarSqliteStore
+from profit.agent import AgentRunner, AgentRunnerConfig, ChatGPTLLM, Question, StubLLM
 
 
-def _parse_date(val: str | None) -> date | None:
-    return date.fromisoformat(val) if val else None
+def _read_text(path: Path | None) -> str | None:
+    if not path:
+        return None
+    return path.read_text(encoding="utf-8").strip()
 
 
-def main(argv: list[str] | None = None) -> int:
+def _apply_stub_responses(llm: StubLLM, pairs: Sequence[str] | None) -> None:
+    if not pairs:
+        return
+    for pair in pairs:
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        llm.set_response(key.strip(), value.strip())
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     if not logging.getLogger().hasHandlers():
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    parser = argparse.ArgumentParser(description="Ask a local data-aware agent (stub).")
-    parser.add_argument("question", help="Natural language question.")
-    parser.add_argument("--start", help="ISO start date (YYYY-MM-DD)", default=None)
-    parser.add_argument("--end", help="ISO end date (YYYY-MM-DD)", default=None)
-    parser.add_argument("--model", help="LLM model name", default="gpt-4.1-mini")
-    parser.add_argument("--live", action="store_true", help="Use ChatGPTLLM instead of StubLLM (requires OPENAI_API_KEY).")
-    parser.add_argument("--store-path", type=Path, help="Path to profit.sqlite (catalog/entity/redfin).")
-    parser.add_argument("--columnar-path", type=Path, help="Path to columnar.sqlite3 for price data.")
-    parser.add_argument("--edgar-docs", type=Path, help="Path to EDGAR docs directory.")
+    parser = argparse.ArgumentParser(description="Run the planner-based agent.")
+    parser.add_argument("question", help="Natural language question you want answered.")
+    parser.add_argument("--hint", action="append", help="Supplementary hint (ticker, region, etc.).", default=[])
+    parser.add_argument("--model", default="gpt-5-nano", help="LLM model name (defaults to gpt-5-nano).")
+    parser.add_argument("--live", action="store_true", help="Use the live ChatGPTLLM instead of the stub.")
+    parser.add_argument("--planner", type=Path, default=Path("planner.md"), help="Path to the planner prompt stub.")
+    parser.add_argument("--instructions", type=Path, help="Additional instructions to append to the prompt.")
+    parser.add_argument("--data", type=Path, help="Optional DATA block to include (raw text).")
+    parser.add_argument(
+        "--stub-response", action="append", metavar="KEY=RESPONSE",
+        help="Keyword-based stub response (can be repeated).",
+    )
     args = parser.parse_args(argv)
 
-    question = Question(text=args.question, start=_parse_date(args.start), end=_parse_date(args.end))
-
-    router = Router()
-    plan = router.route(question)
-    if args.columnar_path:
-        logging.info("prices: using columnar store path=%s", args.columnar_path)
-    col_store = ColumnarSqliteStore(args.columnar_path) if args.columnar_path else None
-
-    data = retrievers.fetch(
-        plan,
-        columnar_store=col_store,
-        catalog_db_path=args.store_path,
-        redfin_db_path=args.store_path,
-        edgar_docs_path=args.edgar_docs,
-        entity_store_path=args.store_path,
+    question = Question(
+        text=args.question,
+        hints=[hint for hint in args.hint if hint],
     )
-    llm = ChatGPTLLM(model=args.model) if args.live else StubLLM(model=args.model)
-    answer = llm.generate(question=question, plan=plan, data=data)
-    print(answer.text)
 
-    # Debug hint for unresolved inputs
-    if isinstance(data.payload, dict):
-        unresolved = []
-        for key in ("unresolved", "unresolved_regions", "unresolved_filings"):
-            vals = data.payload.get(key)
-            if vals:
-                unresolved.extend(vals if isinstance(vals, (list, tuple)) else [vals])
-        if unresolved:
-            print(f"[unresolved inputs] {', '.join(unresolved)}", file=sys.stderr)
+    llm = ChatGPTLLM(model=args.model) if args.live else StubLLM(model=args.model)
+    if isinstance(llm, StubLLM):
+        _apply_stub_responses(llm, args.stub_response)
+
+    runner_config = AgentRunnerConfig(planner_path=args.planner)
+    runner = AgentRunner(llm, config=runner_config)
+    answer = runner.run(
+        question=question,
+        extra_instructions=_read_text(args.instructions),
+        extra_data_block=_read_text(args.data),
+    )
+    print(answer.text)
     return 0
 
 

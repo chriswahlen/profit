@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
-from typing import Iterable
 
 
 @dataclass
 class Question:
     text: str
-    start: date | None = None
-    end: date | None = None
     hints: list[str] | None = None
 
 
