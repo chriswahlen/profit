@@ -39,6 +39,14 @@ response. Validate against the JSON schema (canonical IDs, UTC dates, inclusive 
 for open bounds, aggregation arrays) and reject on any mismatch; log a concise warning with provider,
 symbol/region, and window when rejecting.
 
+For invalid or partial replies, log structured details: warn when validation fails, emit INFO entries for empty/zero-point responses (include provider/exchange and requested window), and capture structured error codes/messages whenever retrievers cannot fulfill a request. Tie these logs to the prompt/response snippets (temp files for anything >4 KB) and include the derived next-step plan (which retrievers/filters to run or whether we're returning directly to the user).
+
+If the agent signals that a new research snippet should be stored (e.g., via a `snippet` request with
+`action: "store"`), validate the snippet schema (title, body, normalized tags, related instruments/regions,
+timestamps) before persisting. When snippets are retrieved, summarize the matches in the next prompt
+and mention their `snippet_id`s so the Agent can reference or build on them. Log both snippet stores
+and lookups (with prompt/response persistence if large), including why each snippet was picked.
+
 If the JSON response contains data requests, we will launch the retrievers to fetch the data, and
 repeat the request with the instructions, the requested data, and the "agent_response" given by
 the Agent.
