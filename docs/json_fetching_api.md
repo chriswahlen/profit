@@ -12,6 +12,9 @@ This API is the "language" the Agent can use to tell us what kind of data to fet
   - By state/province:  state|us|texas
   - By postal code:  postcode|us|20002
   - By country: country|us
+- Aggregation values: "7d_avg", "14d_avg", "30d_avg", "weekly_avg", "monthly_avg",
+                      "7d_median", "14d_median", "30d_median", "weekly_median", "monthly_median",
+                      "monthly_max", "monthly_min", "weekly_max", "weekly_min"
 
 ## Request Envelope
 
@@ -19,18 +22,18 @@ The Agent response can have one request envelope per response.
 
 ```json
 {
-  "data_request": [   // A list of followup requests.
+  "data_request": [{   // A list of followup requests.
     "type": "..."  // one of the data request types: "market", "real_estate", "company_facts"
     "notes": "..."  // any context the Agent wants to keep around for this data
     "request": { }  // Contents of the request
-  ],
+  }],
   "agent_response": "..."   // either the final response, or context for the next set of data requests.
 }
 ```
 
 ### Market Request
 
-Use request_type: "market".
+Use request_type: "market". Example request:
 
 ```json
 // stock/crypto/index fund/forex data request (type: "market")
@@ -45,7 +48,7 @@ Use request_type: "market".
 
 ### Real Estate Request
 
-Use request_type: "real_estate".
+Use request_type: "real_estate". Example request:
 
 ```json
 // Real estate market data request (type: "real_estate")
@@ -59,7 +62,7 @@ Use request_type: "real_estate".
 
 ### Company Info Request
 
-Use request_type: "company_facts".
+Use request_type: "company_facts". Example request:
 
 ```json
 {
