@@ -150,11 +150,12 @@ def _derive_fallback_region_id(normalized: Mapping[str, str]) -> str | None:
     return f"{region_type.lower()}|{_slugify_for_id(candidate)}"
 
 
-def _flush_metric_buffer(cur: sqlite3.Cursor, buffer: list[tuple[str | float | None, ...]]) -> None:
+def _flush_metric_buffer(cur: sqlite3.Cursor, conn: sqlite3.Connection, buffer: list[tuple[str | float | None, ...]]) -> None:
     if not buffer:
         return
     cur.executemany(METRIC_INSERT_SQL, buffer)
     buffer.clear()
+    conn.commit()
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ class RedfinIngestConfig:
     period_granularity: str = "week"
     country_iso2: str = "US"
     default_data_revision: int = 0
-    batch_size: int = 100
+    batch_size: int = 1000
     source_url: str | None = None
 
 
@@ -210,6 +211,8 @@ def ingest_redfin_rows(
     row_count = 0
     max_revision = config.default_data_revision
     metric_buffer: list[tuple[str | float | None, ...]] = []
+    region_revision: dict[str, int] = {}
+    rows_since_log = 0
     for raw in rows:
         normalized = _normalize_row(raw)
         region_id = _find_first(normalized, REGION_ID_COLUMNS) or _derive_fallback_region_id(normalized)
@@ -227,6 +230,7 @@ def ingest_redfin_rows(
             continue
 
         row_count += 1
+        rows_since_log += 1
         revision_val = _parse_int(_find_first(normalized, DATA_REVISION_COLUMNS)) or config.default_data_revision
         max_revision = max(max_revision, revision_val)
 
@@ -238,56 +242,62 @@ def ingest_redfin_rows(
             if meta_val:
                 metadata[meta_key] = meta_val
 
-        # Update canonical regions table
-        cur.execute(
-            """
-            INSERT INTO regions (
-                region_id, region_type, name, canonical_code, country_iso2,
-                parent_region_id, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(region_id) DO UPDATE SET
-                region_type=excluded.region_type,
-                name=excluded.name,
-                canonical_code=excluded.canonical_code,
-                country_iso2=excluded.country_iso2,
-                parent_region_id=COALESCE(excluded.parent_region_id, regions.parent_region_id),
-                metadata=excluded.metadata
-            """,
-            (
+        current_revision = region_revision.get(region_id, -1)
+        if revision_val >= current_revision:
+            cur.execute(
+                """
+                INSERT INTO regions (
+                    region_id, region_type, name, canonical_code, country_iso2,
+                    parent_region_id, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(region_id) DO UPDATE SET
+                    region_type=excluded.region_type,
+                    name=excluded.name,
+                    canonical_code=excluded.canonical_code,
+                    country_iso2=excluded.country_iso2,
+                    parent_region_id=COALESCE(excluded.parent_region_id, regions.parent_region_id),
+                    metadata=excluded.metadata
+                """,
+                (
+                    region_id,
+                    region_type or "",
+                    region_name or "",
+                    canonical_code or region_id,
+                    country_iso,
+                    parent_region,
+                    json.dumps(metadata, sort_keys=True),
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO region_provider_map (
+                    provider, provider_region_id, region_id, provider_name, active_from, data_revision
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider, provider_region_id) DO UPDATE SET
+                    region_id=excluded.region_id,
+                    provider_name=COALESCE(excluded.provider_name, region_provider_map.provider_name),
+                    active_from=MIN(region_provider_map.active_from, excluded.active_from),
+                    data_revision=MAX(region_provider_map.data_revision, excluded.data_revision)
+                """,
+                (
+                    config.provider,
+                    region_id,
+                    region_id,
+                    region_name or "",
+                    run_started_at.isoformat(),
+                    revision_val,
+                ),
+            )
+            region_revision[region_id] = revision_val
+            seen_regions.add(region_id)
+            logger.debug("upserted region %s period %s", region_id, period_start)
+        else:
+            logger.debug(
+                "skipping provider update for %s revision=%s (current=%s)",
                 region_id,
-                region_type or "",
-                region_name or "",
-                canonical_code or region_id,
-                country_iso,
-                parent_region,
-                json.dumps(metadata, sort_keys=True),
-            ),
-        )
-
-        # Provider mapping
-        cur.execute(
-            """
-            INSERT INTO region_provider_map (
-                provider, provider_region_id, region_id, provider_name, active_from, data_revision
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(provider, provider_region_id) DO UPDATE SET
-                region_id=excluded.region_id,
-                provider_name=COALESCE(excluded.provider_name, region_provider_map.provider_name),
-                active_from=MIN(region_provider_map.active_from, excluded.active_from),
-                data_revision=MAX(region_provider_map.data_revision, excluded.data_revision)
-            """,
-            (
-                config.provider,
-                region_id,
-                region_id,
-                region_name or "",
-                run_started_at.isoformat(),
                 revision_val,
-            ),
-        )
-
-        seen_regions.add(region_id)
-        logger.debug("upserted region %s period %s", region_id, period_start)
+                current_revision,
+            )
 
         # Region code map (e.g., state/city/zip)
         for code_type, candidates in CODE_MAP_COLUMNS.items():
@@ -327,9 +337,13 @@ def ingest_redfin_rows(
         metric_buffer.append(tuple(values))
         if len(metric_buffer) >= config.batch_size:
             logger.debug("flushing %s metric rows", len(metric_buffer))
-            _flush_metric_buffer(cur, metric_buffer)
+            _flush_metric_buffer(cur, conn, metric_buffer)
+            logger.info("processed %s rows (total %s)", rows_since_log, row_count)
+            rows_since_log = 0
 
-    _flush_metric_buffer(cur, metric_buffer)
+    _flush_metric_buffer(cur, conn, metric_buffer)
+    if rows_since_log:
+        logger.info("processed %s rows (total %s)", rows_since_log, row_count)
     stats = RedfinIngestionStats(
         row_count=row_count,
         regions=len(seen_regions),
