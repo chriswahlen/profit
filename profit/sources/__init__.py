@@ -5,6 +5,5 @@ Fetcher abstractions and provider-facing types.
 from .base_fetcher import BaseFetcher
 from .batch_fetcher import BatchFetcher
 from .types import Fingerprintable
-from .yfinance import YFinanceFetcher, YFinanceRequest
 
-__all__ = ["BaseFetcher", "BatchFetcher", "Fingerprintable", "YFinanceFetcher", "YFinanceRequest"]
+__all__ = ["BaseFetcher", "BatchFetcher", "Fingerprintable"]
