@@ -240,6 +240,69 @@ class EntityStore:
         row = cur.fetchone()
         return row["entity_id"] if row else None
 
+    def resolve_entity_id(self, identifier: str) -> Optional[str]:
+        """
+        Return the canonical entity_id for the provided identifier string.
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT entity_id FROM entity WHERE entity_id = ?", (identifier,))
+        row = cur.fetchone()
+        if row:
+            return row["entity_id"]
+        cur.execute(
+            "SELECT entity_id FROM entity_identifier WHERE value = ? COLLATE NOCASE",
+            (identifier,),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["entity_id"]
+        cur.execute(
+            "SELECT entity_id FROM entity_identifier WHERE value = ? COLLATE NOCASE",
+            (identifier.upper(),),
+        )
+        row = cur.fetchone()
+        if row:
+            return row["entity_id"]
+        return None
+
+    def list_finance_facts(
+        self,
+        entity_id: str,
+        key: str,
+        *,
+        filings: Iterable[str] | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        if not filings:
+            filings = ["%"]
+        placeholders = " OR ".join("report_id LIKE ?" for _ in filings)
+        sql = f"""
+            SELECT report_id, report_key, period_start, period_end, filed_at, units, value, asof
+            FROM company_finance_fact
+            WHERE entity_id = ?
+              AND report_key = ?
+              AND ({placeholders})
+            ORDER BY period_end DESC
+            LIMIT ?
+        """
+        params = [entity_id, key, *(f"{filing}%" for filing in filings), limit]
+        cur = self.conn.cursor()
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [
+            {
+                "report_id": row["report_id"],
+                "report_key": row["report_key"],
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+                "filed_at": row["filed_at"],
+                "units": row["units"],
+                "value": row["value"],
+                "asof": row["asof"],
+            }
+            for row in rows
+        ]
+
     # --- Finance facts ------------------------------------------------
     def upsert_finance_facts(self, records: Iterable[FinanceFactRecord]) -> int:
         cur = self.conn.cursor()

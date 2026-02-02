@@ -840,6 +840,38 @@ def test_get_or_create_series_returns_existing(tmp_path, monkeypatch):
     assert sid == existing
 
 
+def test_find_series_configs_filters(tmp_path):
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
+    sid_close = store.create_series(
+        instrument_id="XNAS|AAPL",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    sid_volume = store.create_series(
+        instrument_id="XNAS|AAPL",
+        field="volume",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+    store.create_series(
+        instrument_id="XNAS|MSFT",
+        field="close",
+        step_us=DAY_US,
+        grid_origin_ts_us=0,
+        window_points=2,
+    )
+
+    close_matches = store.find_series_configs(instrument_id="XNAS|AAPL", field="close")
+    assert len(close_matches) == 1
+    assert close_matches[0].series_id == sid_close
+
+    all_matches = store.find_series_configs(instrument_id="XNAS|AAPL")
+    assert {cfg.series_id for cfg in all_matches} == {sid_close, sid_volume}
+
+
 def test_create_series_records_provider_id(tmp_path):
     store = ColumnarSqliteStore(tmp_path / "col.sqlite3")
     series_id = store.create_series(

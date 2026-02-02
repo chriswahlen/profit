@@ -70,9 +70,7 @@ class MarketRetriever(BaseRetriever):
         end: datetime,
     ) -> list[tuple[datetime, float]]:
         points: list[tuple[datetime, float]] = []
-        for cfg in self.store._series_cache.values():
-            if cfg.instrument_id != instrument or cfg.field != field:
-                continue
+        for cfg in self.store.find_series_configs(instrument_id=instrument, field=field):
             series_points = self.store.read_points(
                 cfg.series_id,
                 start=start,

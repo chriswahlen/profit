@@ -300,6 +300,19 @@ class ColumnarSqliteStore:
         self._series_cache[series_id] = cfg
         return cfg
 
+    def find_series_configs(self, *, instrument_id: str, field: str | None = None) -> list[SeriesConfig]:
+        """
+        Return cached series configurations that match the requested instrument and optional field.
+        """
+        matches: list[SeriesConfig] = []
+        for cfg in self._series_cache.values():
+            if cfg.instrument_id != instrument_id:
+                continue
+            if field is not None and cfg.field != field:
+                continue
+            matches.append(cfg)
+        return matches
+
     def _row_to_series_config(self, row: sqlite3.Row) -> SeriesConfig:
         sentinel_bits = int(row[10])
         sentinel_unfetched_bits = int(row[11]) if len(row) > 11 else 0

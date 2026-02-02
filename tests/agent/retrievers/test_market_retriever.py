@@ -51,3 +51,39 @@ def test_reports_missing_data(tmp_path: Path) -> None:
     result = retriever.fetch(request)
     assert result.data_needs
     assert "MISSING" in result.data_needs[0]["name"]
+
+
+def test_combines_multiple_series_for_same_instrument(tmp_path: Path) -> None:
+    store = ColumnarSqliteStore(tmp_path / "col.sqlite")
+    origin = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    series_a = store.create_series(
+        instrument_id="XNAS|COMBO",
+        field="close",
+        step_us=86400 * 1_000_000,
+        grid_origin_ts_us=int(origin.timestamp() * 1_000_000),
+        window_points=32,
+    )
+    series_b = store.create_series(
+        instrument_id="XNAS|COMBO",
+        field="close",
+        step_us=86400 * 1_000_000,
+        grid_origin_ts_us=int(origin.timestamp() * 1_000_000),
+        window_points=32,
+        provider_id="alternate",
+    )
+    store.write(series_a, _make_points(origin, 2))
+    store.write(series_b, _make_points(origin + timedelta(days=2), 2))
+    store.flush()
+
+    retriever = MarketRetriever(store=store)
+    request = {
+        "instruments": ["XNAS|COMBO"],
+        "fields": ["close"],
+        "start": "2025-01-01",
+        "end": "2025-01-04",
+        "aggregation": ["7d_avg"],
+    }
+    result = retriever.fetch(request)
+    assert len(result.payload["data"]) == 1
+    points = result.payload["data"][0]["points"]
+    assert len(points) == 4

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import sqlite3
+from datetime import date, datetime
 from pathlib import Path
+from typing import Iterable
+
+import sqlite3
 
 
 class RedfinStore:
@@ -121,3 +124,46 @@ class RedfinStore:
     def close(self) -> None:
         if getattr(self, "_owns_conn", False):
             self.conn.close()
+
+    @staticmethod
+    def _coerce_date(value: str | datetime | date) -> date:
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        return datetime.fromisoformat(value).date()
+
+    def fetch_market_metrics(
+        self,
+        region_ids: Iterable[str],
+        *,
+        start_date: str | datetime | date,
+        end_date: str | datetime | date,
+    ) -> list[dict]:
+        """
+        Return market metrics rows for the provided regions and date window.
+        """
+        start = self._coerce_date(start_date)
+        end = self._coerce_date(end_date)
+        if start > end:
+            raise ValueError("start_date must be <= end_date")
+        region_ids = list(region_ids)
+        if not region_ids:
+            return []
+        placeholders = ",".join("?" for _ in region_ids)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT region_id, period_start_date, period_granularity,
+                   median_sale_price, median_list_price, homes_sold,
+                   new_listings, inventory, median_dom, sale_to_list_ratio,
+                   price_drops_pct, pending_sales, months_supply, avg_ppsf,
+                   source_provider, data_revision
+            FROM market_metrics
+            WHERE region_id IN ({placeholders})
+              AND period_start_date BETWEEN ? AND ?
+            ORDER BY period_start_date ASC
+            """,
+            (*region_ids, start.isoformat(), end.isoformat()),
+        )
+        return [dict(row) for row in cursor.fetchall()]

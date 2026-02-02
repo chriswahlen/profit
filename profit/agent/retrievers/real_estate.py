@@ -44,25 +44,13 @@ class RealEstateRetriever(BaseRetriever):
         window_start, window_end = normalize_window(start, end, default_span=timedelta(days=90))
 
         region_ids = request.get("regions") or []
-        placeholders = ",".join("?" for _ in region_ids)
-        rows: list[tuple] = []
+        rows: list[dict] = []
         if region_ids:
-            cursor = self.store.conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT region_id, period_start_date, period_granularity,
-                       median_sale_price, median_list_price, homes_sold,
-                       new_listings, inventory, median_dom, sale_to_list_ratio,
-                       price_drops_pct, pending_sales, months_supply, avg_ppsf,
-                       source_provider, data_revision
-                FROM market_metrics
-                WHERE region_id IN ({placeholders})
-                  AND period_start_date BETWEEN ? AND ?
-                ORDER BY period_start_date ASC
-                """,
-                (*region_ids, window_start.date().isoformat(), window_end.date().isoformat()),
+            rows = self.store.fetch_market_metrics(
+                region_ids,
+                start_date=window_start.date(),
+                end_date=window_end.date(),
             )
-            rows = cursor.fetchall()
 
         grouped: dict[str, list[dict]] = {}
         for row in rows:
