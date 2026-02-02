@@ -55,6 +55,11 @@ matches in the next prompt and mention their `snippet_id`s so the Agent can refe
 them. Log both snippet stores and lookups (with prompt/response persistence if large), including why
 each snippet was picked.
 
+When the agent identifies datasets it would like, or encounters missing data it cannot fetch (missing fields, instruments, or
+windows), add a `data_needs` array to the envelope describing `name`, `provider`, `reason`, and
+`criticality`. Capture those requests in the logs so data/product teams can prioritize filling the gap
+or exposing an alternate retriever.
+
 If the JSON response contains data requests, we will launch the retrievers to fetch the data, and
 repeat the request with the instructions, the requested data, and the "agent_response" given by
 the Agent.

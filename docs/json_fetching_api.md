@@ -124,6 +124,26 @@ Notes:
 - Aggregations accept an array of keywords (see Definitions); responses should make clear which aggregation produced each value (e.g., separate columns or keyed objects).
 - When you change anything in this document (fields, schemas, snippet behavior, etc.), also update `planner.md` so the agent prompt stays current.
 
+## Explicit data needs
+
+Agents can signal missing or desirable datasets alongside their responses. Include an optional
+`data_needs` array in the envelope if the agent would benefit from data we currently lack:
+
+```json
+{
+  "data_needs": [
+    {
+      "name": "FX|EURUSD intraday ticks",
+      "provider": "provider-slug",
+      "reason": "Needed to analyze hourly carry and mid-price drift for the exposure.",
+      "criticality": "high"   // enum: high | medium | low
+    }
+  ]
+}
+```
+
+Use `name` to describe the dataset, `provider` if a particular source owns it, `reason` to describe why it matters, and `criticality` so humans can prioritize fulfilment. When the dataset exists but is empty for the requested window, capture that via the standard structured error path (see error expectations). This helps us decide whether to add new fetchers or expose a provider-specific backfill.
+
 ## Research snippets
 
 Agents can optionally read from and write to a persistent research-snippet store. Snippets let the Agent reuse prior insights without re-deriving the same context.
