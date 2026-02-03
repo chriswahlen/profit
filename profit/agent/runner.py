@@ -92,8 +92,7 @@ class AgentRunner:
                 result = retriever.fetch(entry["request"], notes=entry.get("notes"))
                 context_blocks.append(json.dumps(result.payload, indent=2))
                 snippet_hits.extend(result.snippet_summaries)
-                for data_need in result.data_needs:
-                    logger.info("retriever data need: %s", data_need.format())
+                self._log_retriever_data_needs(result.data_needs)
 
             current_snippets = snippet_hits
             iteration += 1
@@ -147,6 +146,23 @@ class AgentRunner:
                 criticality=need.get("criticality", "medium"),
             )
             logger.info("agent requested data need: %s", data_need.format())
+
+    def _log_retriever_data_needs(self, needs: Iterable[Any] | None) -> None:
+        if not needs:
+            return
+        for need in needs:
+            if isinstance(need, DataNeed):
+                formatted = need.format()
+            elif isinstance(need, Mapping):
+                formatted = DataNeed(
+                    name=need.get("name", "unknown"),
+                    provider=need.get("provider"),
+                    reason=need.get("reason"),
+                    criticality=need.get("criticality", "medium"),
+                ).format()
+            else:
+                formatted = str(need)
+            logger.info("retriever data need: %s", formatted)
 
     def _log_agent_plan(self, parsed: dict[str, Any]) -> None:
         agent_response = parsed.get("agent_response", "")
