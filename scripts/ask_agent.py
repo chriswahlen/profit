@@ -9,9 +9,23 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Iterable, Sequence
 
 from profit.agent import AgentRunner, AgentRunnerConfig, ChatGPTLLM, Question, StubLLM
+
+
+class FileStubLLM(StubLLM):
+    def __init__(self, *, file_map: dict[str, Path] | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._remaining = dict(file_map or {})
+
+    def _send(self, prompt: str) -> str:
+        lowered = prompt.lower()
+        for keyword in list(self._remaining):
+            if keyword.lower() in lowered:
+                path = self._remaining.pop(keyword)
+                return path.read_text(encoding="utf-8")
+        return super()._send(prompt)
 
 
 def _read_text(path: Path | None) -> str | None:
@@ -30,42 +44,56 @@ def _apply_stub_responses(llm: StubLLM, pairs: Sequence[str] | None) -> None:
         llm.set_response(key.strip(), value.strip())
 
 
-def _load_stub_responses(path: Path | None) -> dict[str, str]:
+def _load_stub_responses(path: Path | None) -> dict[str, Path]:
     if not path:
         return {}
+    index_path = path / "index.json" if path.is_dir() else path
+    if not index_path.exists():
+        raise FileNotFoundError(f"stub index not found: {index_path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(index_path.read_text(encoding="utf-8"))
     except ValueError as exc:
-        raise RuntimeError(f"failed to load stub responses from {path}: {exc}") from exc
+        raise RuntimeError(f"failed to load stub index from {index_path}: {exc}") from exc
     if not isinstance(data, dict):
-        raise RuntimeError(f"stub responses file {path} must contain a JSON object")
-    results: dict[str, str] = {}
-    for key, value in data.items():
-        if not isinstance(value, str):
-            raise RuntimeError(f"stub response for {key!r} must be a string")
-        results[key] = value
+        raise RuntimeError(f"stub index {index_path} must contain a JSON object")
+    base = index_path.parent
+    results: dict[str, Path] = {}
+    for key, rel_path in data.items():
+        if not isinstance(rel_path, str):
+            raise RuntimeError(f"stub response reference for {key!r} must be a string path")
+        response_path = Path(rel_path)
+        if not response_path.is_absolute():
+            response_path = base / response_path
+        if not response_path.exists():
+            raise FileNotFoundError(f"stub response file for {key!r} not found: {response_path}")
+        results[key] = response_path
     return results
 
 
-def _make_stub_key(question: str) -> str:
+def _sanitize_question(question: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", "_", question.lower()).strip("_")
-    return (cleaned[:40] or "stub") + "_stub"
+    return (cleaned[:40] or "stub")
+
+
+def _find_stub_key(question: str, available: Iterable[str]) -> str | None:
+    if question in available:
+        return question
+    sanitized = _sanitize_question(question)
+    if sanitized in available:
+        return sanitized
+    candidate = f"{sanitized}_stub"
+    if candidate in available:
+        return candidate
+    return None
 
 
 def _write_runtime_stub(question: str, response: str, *, key: str | None = None) -> Path:
-    stub_key = key or _make_stub_key(question)
-    timestamp = int(time.time() * 1000)
-    stub_dir = Path("/tmp") / f"ask_agent_stub_{timestamp}"
-    responses_dir = stub_dir / "responses"
-    responses_dir.mkdir(parents=True, exist_ok=True)
-
-    response_file = responses_dir / f"{stub_key}.txt"
-    response_file.write_text(response, encoding="utf-8")
-
-    index = {stub_key: str(response_file.relative_to(stub_dir))}
-    index_path = stub_dir / "index.json"
-    index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
-    return index_path
+    stub_key = key or f"{_sanitize_question(question)}_stub"
+    stub_payload = {stub_key: response}
+    filename = f"ask_agent_stub_{int(time.time() * 1000)}.json"
+    path = Path("/tmp") / filename
+    path.write_text(json.dumps(stub_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -77,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--hint", action="append", help="Supplementary hint (ticker, region, etc.).", default=[])
     parser.add_argument("--model", default="gpt-5-nano", help="LLM model name (defaults to gpt-5-nano).")
     parser.add_argument("--live", action="store_true", help="Use the live ChatGPTLLM instead of the stub.")
-    parser.add_argument("--planner", type=Path, default=Path("planner.md"), help="Path to the planner prompt stub.")
+    parser.add_argument("--planner", type=Path, default=Path("profit/agent/prompts/planner.md"), help="Path to the planner prompt stub.")
     parser.add_argument("--instructions", type=Path, help="Additional instructions to append to the prompt.")
     parser.add_argument("--data", type=Path, help="Optional DATA block to include (raw text).")
     parser.add_argument(
@@ -87,7 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--stub-file",
         type=Path,
-        help="JSON file mapping keywords to stub responses.",
+        help="Path to an index.json (or its parent dir) that maps keywords to response files.",
     )
     args = parser.parse_args(argv)
 
@@ -96,15 +124,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         hints=[hint for hint in args.hint if hint],
     )
 
-    stub_key = _make_stub_key(question.text)
     file_stubs = _load_stub_responses(args.stub_file)
-    if args.stub_file and stub_key not in file_stubs:
-        raise RuntimeError(f"stub file {args.stub_file} missing a response for {stub_key!r}")
-    llm = ChatGPTLLM(model=args.model) if args.live else StubLLM(model=args.model)
+    stub_key: str | None = None
+    if args.stub_file:
+        stub_key = _find_stub_key(question.text, file_stubs.keys())
+        if stub_key is None:
+            raise RuntimeError(
+                f"stub file {args.stub_file} missing a response for '{question.text}'"
+            )
+    if args.live:
+        llm = ChatGPTLLM(model=args.model)
+    else:
+        llm = FileStubLLM(model=args.model, file_map=file_stubs) if file_stubs else StubLLM(model=args.model)
     if isinstance(llm, StubLLM):
         _apply_stub_responses(llm, args.stub_response)
-        for key, value in file_stubs.items():
-            llm.set_response(key, value)
 
     runner_config = AgentRunnerConfig(planner_path=args.planner)
     runner = AgentRunner(llm, config=runner_config)
@@ -114,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_data_block=_read_text(args.data),
     )
     print(answer.text)
-    stub_path = _write_runtime_stub(question.text, answer.text, key=_make_stub_key(question.text))
+    stub_path = _write_runtime_stub(question.text, answer.text, key=stub_key)
     logging.info("wrote runtime stub responses to %s", stub_path)
     return 0
 

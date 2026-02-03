@@ -194,8 +194,15 @@ def validate_agent_response(payload: Any) -> None:
     data_request = payload.get("data_request")
     if not isinstance(data_request, list):
         raise AgentValidationError("data_request must be a list")
-    if "agent_response" not in payload or not isinstance(payload["agent_response"], str):
+    agent_response = payload.get("agent_response")
+    final_response = payload.get("final_response")
+    if agent_response is None:
+        if not final_response or not isinstance(final_response, str):
+            raise AgentValidationError("agent_response must be a string")
+    elif not isinstance(agent_response, str):
         raise AgentValidationError("agent_response must be a string")
+    if final_response is not None and not isinstance(final_response, str):
+        raise AgentValidationError("final_response must be a string")
     for entry in data_request:
         if not isinstance(entry, dict):
             raise AgentValidationError("data_request entries must be objects")

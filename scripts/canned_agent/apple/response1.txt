@@ -1,0 +1,16 @@
+{
+"data_request": [
+{
+"type": "market",
+"notes": "Retrieve Apple daily price and volume data over the last 12 months for performance analysis.",
+"request": {
+"instruments": ["XNAS|AAPL"],
+"fields": ["open", "high", "low", "close", "volume", "adj_close"],
+"start": "2025-02-02",
+"end": "2026-02-02",
+"aggregation": ["7d_avg", "30d_avg", "monthly_max", "monthly_min"]
+}
+}
+],
+"agent_response": "Requesting Apple's daily market data for the past 12 months, including price levels and trading volume. Aggregations will allow analysis of short-term and medium-term trends, volatility via monthly highs/lows, and overall performance over the year."
+}

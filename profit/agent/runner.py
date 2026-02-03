@@ -31,7 +31,7 @@ class AgentRunner:
         snippet_store: SnippetStore | None = None,
     ) -> None:
         self.llm = llm
-        self.config = config or AgentRunnerConfig(planner_path=Path("planner.md"))
+        self.config = config or AgentRunnerConfig(planner_path=Path("profit/agent/prompts/planner.md"))
         self._planner_text: str | None = None
         self.snippet_store = snippet_store or SnippetStore()
         self.retriever_registry = retriever_registry or RetrieverRegistry(snippet_store=self.snippet_store)
@@ -83,7 +83,11 @@ class AgentRunner:
 
             requests = parsed.get("data_request", [])
             if not requests:
-                return response
+                final_text = parsed.get("final_response") or response.text
+                metadata = dict(response.metadata)
+                if "final_response" not in metadata and parsed.get("final_response"):
+                    metadata["final_response"] = parsed["final_response"]
+                return LLMResponse(text=final_text, metadata=metadata)
 
             context_blocks = []
             snippet_hits: list[SnippetSummary] = []
@@ -173,12 +177,20 @@ class AgentRunner:
             summaries.append(f"{entry.get('type')}[{self._describe_request(body)}]")
         plan_summary = ", ".join(summaries) if summaries else "none"
         snippet = self._make_snippet(agent_response)
-        logger.info(
-            "agent response parsed; agent_response=%s; plan=%s; snippet=%s",
-            agent_response.replace("\n", " ")[:200],
-            plan_summary,
-            snippet,
-        )
+        if agent_response:
+            logger.info(
+                "agent response parsed; agent_response=%s; plan=%s; snippet=%s",
+                agent_response.replace("\n", " ")[:200],
+                plan_summary,
+                snippet,
+            )
+        final_response = parsed.get("final_response")
+        if final_response:
+            final_snippet = self._make_snippet(final_response)
+            logger.info(
+                "agent marked final_response; snippet=%s",
+                final_snippet,
+            )
 
     @staticmethod
     def _describe_request(body: Mapping[str, Any]) -> str:
@@ -197,6 +209,8 @@ class AgentRunner:
         message = "agent iteration limit reached"
         if parsed:
             message += f"; last_agent_response={parsed.get('agent_response')!r}"
+            if final := parsed.get("final_response"):
+                message += f"; last_final_response={final!r}"
         if response_text:
             snippet = self._make_snippet(response_text)
             message += f"; last_response_snippet={snippet}"

@@ -1,0 +1,17 @@
+{
+"data_request": [
+{
+"type": "market",
+"notes": "Goal: summarize Apple's market performance over the last year ending 2026-02-02 (compute return from adj_close, describe trend/volatility, and volume behavior).",
+"request": {
+"instruments": ["XNAS|AAPL"],
+"fields": ["open", "high", "low", "close", "adj_close", "volume"],
+"start": "2025-02-02",
+"end": "2026-02-02",
+"aggregation": ["monthly_avg", "monthly_max", "monthly_min"]
+}
+}
+],
+"agent_response": "Next step: fetch AAPL daily OHLCV (including adj_close) from 2025-02-02 through 2026-02-02 (UTC). Use adj_close to compute 1-year total return and identify major drawdowns/recoveries; use monthly_avg plus monthly_max/min to characterize trend and volatility; use volume to note notable spikes or regime shifts. After DATA arrives, produce a concise summary citing provider and the returned date range.",
+"final_response": ""
+}
