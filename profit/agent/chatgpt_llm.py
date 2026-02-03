@@ -5,14 +5,17 @@ import time
 from typing import Any, Mapping, Optional
 
 from profit.agent.llm import BaseLLM, RetryConfig
+from profit.config import get_setting
 
 logger = logging.getLogger(__name__)
 
 try:
     # New SDK entrypoint
     from openai import OpenAI
+    from openai import OpenAIError
 except ImportError:  # pragma: no cover - optional dependency
     OpenAI = None  # type: ignore[misc]
+    OpenAIError = None  # type: ignore[misc]
 
 
 class ChatGPTLLM(BaseLLM):
@@ -28,10 +31,11 @@ class ChatGPTLLM(BaseLLM):
         *,
         model: str = "gpt-5-nano",
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        max_tokens: int = 5000,
         system_prompt: Optional[str] = None,
         retry_policy: Optional[RetryConfig] = None,
         model_kwargs: Optional[Mapping[str, Any]] = None,
+        api_key: str | None = None,
     ) -> None:
         if OpenAI is None:
             raise RuntimeError("The openai package is required for ChatGPTLLM.")
@@ -45,8 +49,10 @@ class ChatGPTLLM(BaseLLM):
         )
         self.retry_policy = retry_policy or RetryConfig()
 
-        # Create a reusable client once (reads OPENAI_API_KEY from env by default).
-        self._client = OpenAI()
+        resolved_key = api_key or get_setting("OPENAI_API_KEY")
+        if not resolved_key:
+            raise RuntimeError("ChatGPTLLM requires OPENAI_API_KEY in configuration.")
+        self._client = OpenAI(api_key=resolved_key)
 
         # Normalize kwargs so **self.model_kwargs is safe.
         self.model_kwargs = dict(model_kwargs or {})
@@ -61,7 +67,7 @@ class ChatGPTLLM(BaseLLM):
         # Split out parameters that belong to the Responses API vs common knobs.
         # temperature is supported for many models; keep it here if your models accept it.
         extra_kwargs = dict(self.model_kwargs)
-        extra_kwargs.setdefault("temperature", self.temperature)
+        # extra_kwargs.setdefault("temperature", self.temperature)
 
         while True:
             attempt += 1
