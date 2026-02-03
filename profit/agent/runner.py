@@ -59,7 +59,8 @@ class AgentRunner:
                 extra_data_block=data_block,
                 extra_instructions=extra_instructions,
             )
-            logger.debug("prompt payload (#%d): %s", iteration + 1, prompt)
+            prompt_snippet = self._make_snippet(prompt, length=200)
+            logger.debug("prompt payload (#%d): %s", iteration + 1, prompt_snippet)
             response = self.llm.generate(question=question, plan=None, data=data_block, prompt=prompt)
             last_response = response
 

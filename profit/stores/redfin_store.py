@@ -4,7 +4,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 
+import logging
 import sqlite3
+
+logger = logging.getLogger(__name__)
 
 
 class RedfinStore:
@@ -35,6 +38,7 @@ class RedfinStore:
         self.conn.row_factory = sqlite3.Row
         if not readonly:
             self.ensure_schema()
+        logger.info("redfin store opening %s (readonly=%s)", self.db_path, readonly)
 
     def ensure_schema(self) -> None:
         cur = self.conn.cursor()
@@ -152,8 +156,7 @@ class RedfinStore:
             return []
         placeholders = ",".join("?" for _ in region_ids)
         cursor = self.conn.cursor()
-        cursor.execute(
-            f"""
+        query = f"""
             SELECT region_id, period_start_date, period_granularity,
                    median_sale_price, median_list_price, homes_sold,
                    new_listings, inventory, median_dom, sale_to_list_ratio,
@@ -163,7 +166,8 @@ class RedfinStore:
             WHERE region_id IN ({placeholders})
               AND period_start_date BETWEEN ? AND ?
             ORDER BY period_start_date ASC
-            """,
-            (*region_ids, start.isoformat(), end.isoformat()),
-        )
+            """
+        params = (*region_ids, start.isoformat(), end.isoformat())
+        logger.info("redfin query: %s params=%s", query.strip(), params)
+        cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]

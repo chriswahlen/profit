@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -96,10 +97,16 @@ def _write_runtime_stub(question: str, response: str, *, key: str | None = None)
     return path
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    if not logging.getLogger().hasHandlers():
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+def _configure_logging(level_name: str | None) -> None:
+    if logging.getLogger().hasHandlers():
+        return
+    env = os.getenv("PROFIT_AGENT_LOG_LEVEL", "").upper()
+    level_key = (level_name or env or "INFO").upper()
+    level = getattr(logging, level_key, logging.INFO)
+    logging.basicConfig(level=level, format="%(levelname)s %(message)s")
 
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the planner-based agent.")
     parser.add_argument("question", help="Natural language question you want answered.")
     parser.add_argument("--hint", action="append", help="Supplementary hint (ticker, region, etc.).", default=[])
@@ -117,7 +124,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="Path to an index.json (or its parent dir) that maps keywords to response files.",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Override the log level (overrides PROFIT_AGENT_LOG_LEVEL).",
+    )
     args = parser.parse_args(argv)
+
+    _configure_logging(args.log_level)
 
     question = Question(
         text=args.question,

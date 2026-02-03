@@ -33,11 +33,12 @@ class SliceCorruptionError(ColumnarStoreError):
 
 def _default_db_path() -> Path:
     ensure_profit_conf_loaded()
-    # Prefer data root for persistent series storage; fall back to cache root.
     data_root = ProfitConfig.resolve_data_root()
     if data_root:
-        return Path(data_root) / "columnar.sqlite3"
-    return ProfitConfig.resolve_cache_root() / "columnar.sqlite3"
+        candidate = Path(data_root) / "profit.sqlite3"
+        if candidate.exists():
+            return candidate
+    return Path("data/profit.sqlite")
 
 
 def _default_unfetched_bits(sentinel_bits: int) -> int:
@@ -196,6 +197,9 @@ class ColumnarSqliteStore:
         self._pending_limit = pending_limit if pending_limit is not None else self.DEFAULT_PENDING_LIMIT
         self._dedupe_pending = dedupe_pending
         self._series_cache: dict[int, SeriesConfig] = {}
+        if logger.isEnabledFor(logging.DEBUG):
+            self._conn.set_trace_callback(lambda sql: logger.debug("columnar.sql: %s", sql))
+        logger.info("columnar store opening %s", self.db_path)
         self._init_schema()
         self._preload_series_cache()
 
