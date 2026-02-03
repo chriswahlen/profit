@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from profit.agent.data_formatter import format_data_block
 from profit.agent.llm import BaseLLM, LLMResponse
 from profit.agent.retrievers import RetrieverRegistry
 from profit.agent.snippets import SnippetStore
@@ -46,6 +47,7 @@ class AgentRunner:
     ) -> LLMResponse:
         current_snippets = list(snippets or [])
         context_blocks: list[str] = [extra_data_block] if extra_data_block else []
+        pending_agent_response: str | None = None
         iteration = 0
         last_response: LLMResponse | None = None
         last_parsed: dict[str, Any] | None = None
@@ -58,9 +60,10 @@ class AgentRunner:
                 snippets=current_snippets,
                 extra_data_block=data_block,
                 extra_instructions=extra_instructions,
+                agent_response=pending_agent_response,
             )
             prompt_snippet = self._make_snippet(prompt, length=200)
-            logger.debug("prompt payload (#%d): %s", iteration + 1, prompt_snippet)
+            logger.debug("prompt payload (#%d)", iteration + 1)
             response = self.llm.generate(question=question, plan=None, data=data_block, prompt=prompt)
             last_response = response
 
@@ -82,6 +85,7 @@ class AgentRunner:
 
             self._log_data_needs(parsed.get("data_needs", []))
 
+            pending_agent_response = parsed.get("agent_response") or pending_agent_response
             requests = parsed.get("data_request", [])
             if not requests:
                 final_text = parsed.get("final_response") or response.text
@@ -95,7 +99,7 @@ class AgentRunner:
             for entry in requests:
                 retriever = self.retriever_registry.get(entry["type"])
                 result = retriever.fetch(entry["request"], notes=entry.get("notes"))
-                context_blocks.append(json.dumps(result.payload, indent=2))
+                context_blocks.append(format_data_block(result.payload))
                 snippet_hits.extend(result.snippet_summaries)
                 self._log_retriever_data_needs(result.data_needs)
 
@@ -111,6 +115,7 @@ class AgentRunner:
         snippets: Iterable[SnippetSummary] | None,
         extra_data_block: str | None,
         extra_instructions: str | None,
+        agent_response: str | None,
     ) -> str:
         sections: list[str] = [self._planner_text or self._load_planner()]
         if extra_instructions:
@@ -120,7 +125,10 @@ class AgentRunner:
             sections.append("Research snippets:\n" + "\n\n".join(snippet.format() for snippet in snippets))
 
         if extra_data_block:
-            sections.append(f"DATA:\n{extra_data_block}")
+            sections.append(extra_data_block)
+
+        if agent_response:
+            sections.append(f"Agent response:\n{agent_response}")
 
         question_lines = [f"Question:\n{question.text}"]
         if question.hints:

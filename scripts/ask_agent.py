@@ -160,7 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_instructions=_read_text(args.instructions),
         extra_data_block=_read_text(args.data),
     )
-    print(answer.text)
+    # print(answer.text)
     stub_path = _write_runtime_stub(question.text, answer.text, key=stub_key)
     logging.info("wrote runtime stub responses to %s", stub_path)
     return 0

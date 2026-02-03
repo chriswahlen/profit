@@ -53,10 +53,8 @@ class BaseLLM(ABC):
     ) -> LLMResponse:
         body = prompt or self._build_prompt(question=question, plan=plan, data=data)
         self._log_payload("prompt", body)
-        logger.debug("LLM(%s) sending prompt", self.__class__.__name__)
         text = self._send(body)
         self._log_payload("response", text)
-        logger.debug("LLM(%s) received response", self.__class__.__name__)
         return LLMResponse(text=text, metadata={"model": self.model})
 
     def _build_prompt(self, *, question: Any, plan: Any | None, data: Any | None) -> str:
