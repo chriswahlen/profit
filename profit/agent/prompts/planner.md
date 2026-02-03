@@ -139,8 +139,3 @@ The API is JSON, and the structure is given by examples, which should be used fo
   "limit": 5
 }
 ```
-
-Query:
-
-Today's date is February 2, 2026.
-Summarize Apple's market performance over the last year.

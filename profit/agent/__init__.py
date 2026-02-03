@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .llm import BaseLLM, ChatGPTLLM, LLMResponse, RetryConfig, StubLLM
+from .chatgpt_llm import ChatGPTLLM
+from .llm import BaseLLM, LLMResponse, RetryConfig, StubLLM
 from .runner import AgentRunner, AgentRunnerConfig
 from .types import DataNeed, Question, SnippetSummary
 from .retrievers import RetrieverRegistry, RetrieverResult

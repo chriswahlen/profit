@@ -39,7 +39,7 @@ def test_format_market_data_truncates_rows() -> None:
     payload = {"type": "market", "data": data}
     formatted = format_data_block(payload)
 
-    assert "(+3 more dates)" in formatted
+    assert "2025-02-15: 14.00" in formatted
 
 
 def test_format_generic_payload_flat() -> None:

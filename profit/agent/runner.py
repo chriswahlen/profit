@@ -130,7 +130,7 @@ class AgentRunner:
         if agent_response:
             sections.append(f"Agent response:\n{agent_response}")
 
-        question_lines = [f"Question:\n{question.text}"]
+        question_lines = [f"Query:\n{question.text}"]
         if question.hints:
             question_lines.append(f"Hints: {', '.join(question.hints)}")
 

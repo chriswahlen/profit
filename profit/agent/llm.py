@@ -5,12 +5,8 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping
-
-try:
-    import openai
-except ImportError:  # pragma: no cover - optional dependency
-    openai = None
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +38,8 @@ class BaseLLM(ABC):
         self.max_tokens = max_tokens
         self.system_prompt = system_prompt or "You are a helpful analytics agent."
         self.model_kwargs = model_kwargs or {}
+        self._payload_counts: dict[str, int] = {}
+        self._run_dir: Path | None = None
 
     def generate(
         self,
@@ -51,16 +49,20 @@ class BaseLLM(ABC):
         data: Any | None = None,
         prompt: str | None = None,
     ) -> LLMResponse:
-        body = prompt or self._build_prompt(question=question, plan=plan, data=data)
-        self._log_payload("prompt", body)
-        text = self._send(body)
-        self._log_payload("response", text)
-        return LLMResponse(text=text, metadata={"model": self.model})
+        run_dir = self.begin_run() if self._run_dir is None else self._run_dir
+        try:
+            body = prompt or self._build_prompt(question=question, plan=plan, data=data)
+            self._log_payload("prompt", body)
+            text = self._send(body)
+            self._log_payload("response", text)
+            return LLMResponse(text=text, metadata={"model": self.model})
+        finally:
+            logger.info("LLM artifacts stored in %s", run_dir)
 
     def _build_prompt(self, *, question: Any, plan: Any | None, data: Any | None) -> str:
         parts: list[str] = []
         if question:
-            parts.append(f"Question:\n{getattr(question, 'text', str(question))}")
+            parts.append(f"Query:\n{getattr(question, 'text', str(question))}")
         if plan:
             parts.append(f"Plan:\n{plan}")
         if data:
@@ -71,27 +73,18 @@ class BaseLLM(ABC):
 
     def _log_payload(self, label: str, text: str) -> None:
         size = len(text.encode("utf-8"))
-        if size <= self.PROMPT_SNIPPET_THRESHOLD:
-            logger.info("%s payload (%d bytes): %s", label, size, text)
-            return
-
         snippet = self._make_snippet(text)
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False,
-            prefix=f"agent_{label}_",
-            suffix=".txt",
-            mode="w",
-            encoding="utf-8",
-        )
-        tmp.write(text)
-        tmp.flush()
-        tmp_path = tmp.name
-        tmp.close()
+        run_dir = self._ensure_run_dir()
+        base = "request" if label == "prompt" else label
+        idx = self._payload_counts.get(base, 0) + 1
+        self._payload_counts[base] = idx
+        out_path = run_dir / f"{base}{idx}.txt"
+        out_path.write_text(text, encoding="utf-8")
         logger.info(
             "%s payload (%d bytes) written to %s; snippet=%s",
             label,
             size,
-            tmp_path,
+            out_path,
             snippet,
         )
 
@@ -104,6 +97,27 @@ class BaseLLM(ABC):
     @abstractmethod
     def _send(self, prompt: str) -> str:
         ...
+
+    def begin_run(self) -> Path:
+        self._payload_counts = {}
+        self._run_dir = self._create_run_dir()
+        return self._run_dir
+
+    def _create_run_dir(self) -> Path:
+        base = Path(tempfile.gettempdir())
+        dir_name = f"profit_agent_{int(time.time() * 1000)}"
+        path = base / dir_name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _ensure_run_dir(self) -> Path:
+        if self._run_dir is None:
+            self.begin_run()
+        return self._run_dir
+
+    def finalize_run(self) -> None:
+        if self._run_dir:
+            logger.info("LLM artifacts stored in %s", self._run_dir)
 
 
 class StubLLM(BaseLLM):
@@ -128,51 +142,3 @@ class StubLLM(BaseLLM):
                 return response
         return self.default_response
 
-
-class ChatGPTLLM(BaseLLM):
-    def __init__(
-        self,
-        *,
-        model: str = "gpt-5-nano",
-        temperature: float = 0.0,
-        max_tokens: int = 512,
-        system_prompt: str | None = None,
-        retry_policy: RetryConfig | None = None,
-        model_kwargs: Mapping[str, Any] | None = None,
-    ) -> None:
-        if openai is None:
-            raise RuntimeError("The openai package is required for ChatGPTLLM.")
-        super().__init__(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            system_prompt=system_prompt,
-            model_kwargs=model_kwargs,
-        )
-        self.retry_policy = retry_policy or RetryConfig()
-
-    def _send(self, prompt: str) -> str:
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                response = openai.ChatCompletion.create(
-                    model=self.model,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    **self.model_kwargs,
-                )
-                text = response.choices[0].message.content.strip()
-                logger.debug("ChatGPTLLM received %d tokens", response.usage.total_tokens if getattr(response, "usage", None) else 0)
-                return text
-            except Exception as exc:
-                if attempt >= self.retry_policy.max_attempts:
-                    logger.error("ChatGPTLLM failed after %d attempts", attempt)
-                    raise
-                sleep_time = self.retry_policy.backoff_seconds * attempt
-                logger.warning("ChatGPTLLM attempt %d failed (%s); retrying in %.1fs", attempt, exc, sleep_time)
-                time.sleep(sleep_time)
