@@ -41,11 +41,16 @@ class EdgarDatabase:
     """
 
     @dataclass(frozen=True)
+    class EntitySchemeRow:
+        scheme_id: int
+        scheme: str
+
+    @dataclass(frozen=True)
     class XbrlContextRow:
         context_id: int
         accession: str
         context_ref: str
-        entity_scheme: str | None
+        entity_scheme_id: int | None
         entity_id: str | None
         period_type: str
         start_date: str | None
@@ -147,17 +152,23 @@ class EdgarDatabase:
 
         cur.executescript(
             """
+            CREATE TABLE IF NOT EXISTS entity_scheme (
+                scheme_id INTEGER PRIMARY KEY,
+                scheme TEXT NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS xbrl_context (
                 context_id INTEGER PRIMARY KEY,
                 accession TEXT NOT NULL,
                 context_ref TEXT NOT NULL,
-                entity_scheme TEXT,
+                entity_scheme_id INTEGER,
                 entity_id TEXT,
                 period_type TEXT NOT NULL CHECK (period_type IN ('instant','duration')),
                 start_date TEXT,
                 end_date TEXT,
                 instant_date TEXT,
                 FOREIGN KEY(accession) REFERENCES edgar_accession(accession),
+                FOREIGN KEY(entity_scheme_id) REFERENCES entity_scheme(scheme_id),
                 UNIQUE (accession, context_ref)
             );
             CREATE INDEX IF NOT EXISTS idx_context_accession ON xbrl_context(accession);
@@ -419,12 +430,20 @@ class EdgarDatabase:
         self.conn.commit()
 
     # --- XBRL helpers -------------------------------------------------------
+    def get_or_create_entity_scheme(self, scheme: str) -> int:
+        row = self.conn.execute("SELECT scheme_id FROM entity_scheme WHERE scheme = ?", (scheme,)).fetchone()
+        if row:
+            return row["scheme_id"]
+        cur = self.conn.execute("INSERT INTO entity_scheme (scheme) VALUES (?)", (scheme,))
+        self.conn.commit()
+        return cur.lastrowid
+
     def upsert_xbrl_context(
         self,
         accession: str,
         context_ref: str,
         *,
-        entity_scheme: str | None = None,
+        entity_scheme_id: int | None = None,
         entity_id: str | None = None,
         period_type: str = "duration",
         start_date: str | None = None,
@@ -436,7 +455,7 @@ class EdgarDatabase:
             INSERT INTO xbrl_context (
                 accession,
                 context_ref,
-                entity_scheme,
+                entity_scheme_id,
                 entity_id,
                 period_type,
                 start_date,
@@ -445,7 +464,7 @@ class EdgarDatabase:
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(accession, context_ref) DO UPDATE SET
-                entity_scheme=excluded.entity_scheme,
+                entity_scheme_id=excluded.entity_scheme_id,
                 entity_id=excluded.entity_id,
                 period_type=excluded.period_type,
                 start_date=excluded.start_date,
@@ -455,7 +474,7 @@ class EdgarDatabase:
             (
                 accession,
                 context_ref,
-                entity_scheme,
+                entity_scheme_id,
                 entity_id,
                 period_type,
                 start_date,
@@ -666,7 +685,7 @@ class EdgarDatabase:
             context_id=row["context_id"],
             accession=row["accession"],
             context_ref=row["context_ref"],
-            entity_scheme=row["entity_scheme"],
+            entity_scheme_id=row["entity_scheme_id"],
             entity_id=row["entity_id"],
             period_type=row["period_type"],
             start_date=row["start_date"],
@@ -733,10 +752,15 @@ class EdgarDatabase:
             start_date = _date_iso(ctx.period_start) if ctx.period_type == "duration" else None
             end_date = _date_iso(ctx.period_end) if ctx.period_type == "duration" else None
             instant_date = _date_iso(ctx.period_end) if ctx.period_type == "instant" else None
+            scheme_id = (
+                self.get_or_create_entity_scheme(ctx.entity_scheme)
+                if ctx.entity_scheme
+                else None
+            )
             context_id = self.upsert_xbrl_context(
                 accession,
                 ctx.id,
-                entity_scheme=ctx.entity_scheme,
+                entity_scheme_id=scheme_id,
                 entity_id=ctx.entity_id,
                 period_type=ctx.period_type,
                 start_date=start_date,

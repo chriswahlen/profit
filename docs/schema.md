@@ -15,7 +15,12 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 5. `ingestion_runs` – audit trail per fetch run with `run_id`, provider metadata, `status`, optional `etag/last_modified`, row count, and `data_revision`.
 ## EDGAR/XBRL schema
 
-1. `xbrl_context` – per-`edgar_accession` context (contextRef, entity scheme/id, and normalized period fields). Uniqueness ensures each accession+context combo is stored only once and links back to `edgar_accession(accession)`.
+1. `entity_scheme` – canonical list of entity identifier schemes (`scheme_id`, `scheme`).
+2. `xbrl_context` – per-`edgar_accession` context (contextRef, entity scheme foreign key, and normalized period fields). Uniqueness ensures each accession+context combo is stored only once and links back to `edgar_accession(accession)` and `entity_scheme(scheme_id)`.
+3. `dimension_axis`, `dimension_member`, and `context_dimension` – normalized axis/member vocabularies plus the join table so you can project dimensional statements without reserializing XML segments.
+4. `xbrl_concept` – canonical `qname`, optional label, and data-type metadata for every XBRL concept we cache. Facts reference concepts by ID for compact joins.
+5. `xbrl_unit` – per-accession unitRef entries with canonical measures, giving a fast way to normalize USD/shares/pure units when writing metrics.
+6. `xbrl_fact` – numeric/text facts keyed by accession, concept, context, and unit; keeps the original lexical string, `(value_numeric|value_text)`, nil flag, and optional footnote HTML. Indexes support lookups by accession+concept+context and by concept/context alone.
 2. `dimension_axis`, `dimension_member`, and `context_dimension` – normalized axis/member vocabularies plus the join table so you can project dimensional statements without reserializing XML segments.
 3. `xbrl_concept` – canonical `qname`, optional label, and data-type metadata for every XBRL concept we cache. Facts reference concepts by ID for compact joins.
 4. `xbrl_unit` – per-accession unitRef entries with canonical measures, giving a fast way to normalize USD/shares/pure units when writing metrics.
