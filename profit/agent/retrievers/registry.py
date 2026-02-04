@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from profit.agent.retrievers.company_facts import CompanyFactsRetriever
 from profit.agent.retrievers.market import MarketRetriever
 from profit.agent.retrievers.real_estate import RealEstateRetriever
 from profit.agent.retrievers.snippet import SnippetRetriever
@@ -14,7 +13,6 @@ class RetrieverRegistry:
         self._registry: dict[str, BaseRetriever] = {
             "market": MarketRetriever(),
             "real_estate": RealEstateRetriever(),
-            "company_facts": CompanyFactsRetriever(),
             "snippet": SnippetRetriever(store=store),
         }
 

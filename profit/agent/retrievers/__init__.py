@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .base import BaseRetriever, RetrieverResult
-from .company_facts import CompanyFactsRetriever
 from .market import MarketRetriever
 from .real_estate import RealEstateRetriever
 from .snippet import SnippetRetriever
@@ -12,7 +11,6 @@ __all__ = [
     "RetrieverResult",
     "MarketRetriever",
     "RealEstateRetriever",
-    "CompanyFactsRetriever",
     "SnippetRetriever",
     "RetrieverRegistry",
 ]

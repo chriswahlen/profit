@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-from profit.catalog.types import EntityIdentifierRecord, EntityRecord, FinanceFactRecord
+from profit.catalog.types import EntityIdentifierRecord, EntityRecord
 
 
 def _dt_to_str(dt: datetime) -> str:
@@ -47,9 +47,7 @@ def validate_entity_id(entity_id: str) -> None:
 
 class EntityStore:
     """
-    SQLite-backed store for provider, entity, identifier, and company finance facts.
-    Keeps a single authoritative row per finance fact key; newer asof overwrites older,
-    older-asof conflicting writes are rejected to keep ingestion deterministic.
+    SQLite-backed store for providers, entities, and identifiers.
     """
 
     def __init__(self, db_path: Path, *, readonly: bool = False, conn: sqlite3.Connection | None = None) -> None:
@@ -101,29 +99,6 @@ class EntityStore:
             CREATE INDEX IF NOT EXISTS idx_identifier_scheme_value ON entity_identifier(scheme, value);
             CREATE INDEX IF NOT EXISTS idx_identifier_entity ON entity_identifier(entity_id);
 
-            CREATE TABLE IF NOT EXISTS company_finance_fact (
-                entity_id          TEXT NOT NULL REFERENCES entity(entity_id),
-                provider_id        TEXT NOT NULL REFERENCES provider(provider_id),
-                provider_entity_id TEXT NOT NULL,
-                record_id          TEXT NOT NULL,
-                report_id          TEXT NOT NULL,
-                report_key         TEXT NOT NULL,
-                period_start       TEXT,
-                period_end         TEXT NOT NULL,
-                decimals           INTEGER,
-                dimensions_sig     TEXT,
-                is_consolidated    INTEGER,
-                amendment_flag     INTEGER,
-                filed_at           TEXT,
-                units              TEXT NOT NULL,
-                value              REAL,
-                asof               TEXT NOT NULL,
-                attrs              TEXT,
-                PRIMARY KEY (provider_id, provider_entity_id, record_id, report_id, report_key, period_end)
-            );
-            CREATE INDEX IF NOT EXISTS idx_finance_entity_period ON company_finance_fact(entity_id, period_end);
-            CREATE INDEX IF NOT EXISTS idx_finance_provider_entity ON company_finance_fact(provider_id, provider_entity_id);
-            CREATE INDEX IF NOT EXISTS idx_finance_report_lookup ON company_finance_fact(provider_id, provider_entity_id, report_id, report_key, period_end);
         """
         )
         self.conn.commit()
@@ -278,155 +253,3 @@ class EntityStore:
         cur = self.conn.execute(query, params)
         row = cur.fetchone()
         return row["value"] if row else None
-
-    def list_finance_facts(
-        self,
-        entity_id: str,
-        key: str,
-        *,
-        filings: Iterable[str] | None = None,
-        limit: int = 5,
-    ) -> list[dict]:
-        if not filings:
-            filings = ["%"]
-        placeholders = " OR ".join("report_id LIKE ?" for _ in filings)
-        sql = f"""
-            SELECT report_id, report_key, period_start, period_end, filed_at, units, value, asof
-            FROM company_finance_fact
-            WHERE entity_id = ?
-              AND report_key = ?
-              AND ({placeholders})
-            ORDER BY period_end DESC
-            LIMIT ?
-        """
-        params = [entity_id, key, *(f"{filing}%" for filing in filings), limit]
-        cur = self.conn.cursor()
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        return [
-            {
-                "report_id": row["report_id"],
-                "report_key": row["report_key"],
-                "period_start": row["period_start"],
-                "period_end": row["period_end"],
-                "filed_at": row["filed_at"],
-                "units": row["units"],
-                "value": row["value"],
-                "asof": row["asof"],
-            }
-            for row in rows
-        ]
-
-    # --- Finance facts ------------------------------------------------
-    def upsert_finance_facts(self, records: Iterable[FinanceFactRecord]) -> int:
-        cur = self.conn.cursor()
-        written = 0
-        for r in records:
-            validate_entity_id(r.entity_id)
-            key = (
-                r.provider_id,
-                r.provider_entity_id,
-                r.record_id,
-                r.report_id,
-                r.report_key,
-                _date_to_str(r.period_end),
-            )
-            cur.execute(
-                """
-                SELECT value, units, asof, attrs, decimals, period_start, dimensions_sig, is_consolidated, amendment_flag, filed_at
-                FROM company_finance_fact
-                WHERE provider_id = ? AND provider_entity_id = ? AND record_id = ? AND report_id = ?
-                      AND report_key = ? AND period_end = ?
-                """,
-                key,
-            )
-            existing = cur.fetchone()
-            new_asof = _dt_to_str(r.asof)
-            attrs_json = json.dumps(r.attrs or {}, sort_keys=True)
-            if existing:
-                existing_asof = _str_to_dt(existing["asof"])
-                if (
-                    existing["value"] == r.value
-                    and existing["units"] == r.units
-                    and existing["attrs"] == attrs_json
-                    and existing["decimals"] == r.decimals
-                    and existing["period_start"] == _maybe_date_to_str(r.period_start)
-                    and existing["dimensions_sig"] == r.dimensions_sig
-                    and existing["is_consolidated"] == _bool_to_int(r.is_consolidated)
-                    and existing["amendment_flag"] == _bool_to_int(r.amendment_flag)
-                    and existing["filed_at"] == _maybe_dt_to_str(r.filed_at)
-                ):
-                    # identical payload; keep earliest asof
-                    if r.asof > existing_asof:
-                        cur.execute(
-                            """
-                            UPDATE company_finance_fact
-                            SET asof = ?
-                            WHERE provider_id = ? AND provider_entity_id = ? AND record_id = ? AND report_id = ?
-                                  AND report_key = ? AND period_end = ?
-                            """,
-                            (new_asof, *key),
-                        )
-                    continue
-                if r.asof < existing_asof:
-                    raise ValueError(
-                        "Refusing to overwrite finance fact with older asof for key "
-                        f"{key[:-1]} period_end={key[-1]}"
-                    )
-                # overwrite with newer data
-                cur.execute(
-                    """
-                    UPDATE company_finance_fact
-                    SET entity_id=?, units=?, value=?, asof=?, attrs=?, decimals=?, period_start=?, dimensions_sig=?,
-                        is_consolidated=?, amendment_flag=?, filed_at=?
-                    WHERE provider_id = ? AND provider_entity_id = ? AND record_id = ? AND report_id = ?
-                          AND report_key = ? AND period_end = ?
-                    """,
-                    (
-                        r.entity_id,
-                        r.units,
-                        r.value,
-                        new_asof,
-                        attrs_json,
-                        r.decimals,
-                        _maybe_date_to_str(r.period_start),
-                        r.dimensions_sig,
-                        _bool_to_int(r.is_consolidated),
-                        _bool_to_int(r.amendment_flag),
-                        _maybe_dt_to_str(r.filed_at),
-                        *key,
-                    ),
-                )
-                written += cur.rowcount
-            else:
-                cur.execute(
-                    """
-                    INSERT INTO company_finance_fact (
-                        entity_id, provider_id, provider_entity_id, record_id, report_id,
-                        report_key, period_start, period_end, decimals, dimensions_sig,
-                        is_consolidated, amendment_flag, filed_at, units, value, asof, attrs
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        r.entity_id,
-                        r.provider_id,
-                        r.provider_entity_id,
-                        r.record_id,
-                        r.report_id,
-                        r.report_key,
-                        _maybe_date_to_str(r.period_start),
-                        _date_to_str(r.period_end),
-                        r.decimals,
-                        r.dimensions_sig,
-                        _bool_to_int(r.is_consolidated),
-                        _bool_to_int(r.amendment_flag),
-                        _maybe_dt_to_str(r.filed_at),
-                        r.units,
-                        r.value,
-                        new_asof,
-                        attrs_json,
-                    ),
-                )
-                written += 1
-        self.conn.commit()
-        return written

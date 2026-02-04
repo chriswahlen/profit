@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Lightweight XBRL-to-FinanceFact transformer.
+"""XBRL parsing helpers used by the EDGAR ingestion pipeline.
 
-This module walks an XBRL instance document and emits normalized finance
-facts suitable for insertion into ``company_finance_fact``. It is intentionally
-minimal: we only parse contexts, units, and numeric facts, and we ignore
-presentation/calculation/linkbase data.
+This module walks an XBRL instance document to parse contexts, units, and
+facts. Linkbase data is intentionally ignored because we currently rely on
+the raw instance for structured ingestion.
 """
 
 import logging
@@ -16,7 +15,6 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from xml.etree import ElementTree as ET
 
-from profit.catalog.types import FinanceFactRecord
 from profit.edgar.xml_parser import ParsedXbrl, parse_xbrl
 
 logger = logging.getLogger(__name__)
@@ -248,100 +246,3 @@ def normalize_unit(measures: Iterable[str]) -> str | None:
 
 # --- Public API -------------------------------------------------------------
 
-
-def extract_finance_facts(
-    *,
-    xml_bytes: bytes,
-    cik: str,
-    accession: str,
-    entity_id: str,
-    provider_id: str,
-    provider_entity_id: str,
-    report_id: str,
-    source_file: str,
-    source_url: str | None,
-    asof: datetime,
-    filed_at: datetime | None,
-    amendment_flag: bool | None,
-) -> list[FinanceFactRecord]:
-    """Transform an XBRL instance into FinanceFactRecord rows.
-
-    - ``report_id`` is the form type (e.g., 10-K, 10-Q, 8-K).
-    - ``report_key`` is the local tag name; namespace URI is captured in attrs.
-    """
-
-    try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as exc:  # pragma: no cover - validated upstream
-        logger.warning("invalid XML skipped accession=%s file=%s err=%s", accession, source_file, exc)
-        return []
-
-    def _has_xbrl(elem: ET.Element) -> bool:
-        tag = elem.tag.lower()
-        if tag.endswith("xbrl"):
-            return True
-        for child in elem.iter():
-            if child is elem:
-                continue
-            if child.tag.lower().endswith("xbrl"):
-                return True
-        return False
-
-    if not _has_xbrl(root):
-        logger.info("skip non-xbrl xml accession=%s file=%s", accession, source_file)
-        return []
-
-    contexts = parse_contexts(root)
-    ctx_dims = _context_dimensions(root)
-    units = parse_units(root)
-    parsed = parse_xbrl(xml_bytes)
-
-    facts: list[FinanceFactRecord] = []
-    for fact in parsed.facts:
-        ctx = contexts.get(fact.context_ref or "")
-        if ctx is None or ctx.period_end is None:
-            logger.debug("skip fact name=%s missing context_ref=%s", fact.name, fact.context_ref)
-            continue  # cannot place the fact in time
-        dim_sig, is_cons, canonical_dims = ctx_dims.get(fact.context_ref or "", ("", True, ""))
-        unit = units.get(fact.unit_ref or "")
-        normalized_unit = normalize_unit(unit.measures) if unit else None
-        if normalized_unit is None:
-            continue
-
-        attrs = dict(fact.attrs)
-        # Capture provenance and timing hints
-        attrs.update(
-            {
-                "context_period_type": ctx.period_type,
-                # Do not duplicate fields already stored as columns.
-                "source_file": source_file,
-                "source_url": source_url,
-                "namespace": attrs.get("xmlns") or None,
-                "dimensions_canonical": canonical_dims or None,
-            }
-        )
-        # Strip attrs that are None/empty to keep payload lean.
-        attrs = {k: v for k, v in attrs.items() if v not in (None, "")}
-
-        record = FinanceFactRecord(
-            entity_id=entity_id,
-            provider_id=provider_id,
-            provider_entity_id=provider_entity_id,
-            record_id=accession,
-            report_id=report_id,
-            report_key=fact.name,
-            period_start=ctx.period_start,
-            period_end=ctx.period_end,
-            units=normalized_unit,
-            value=fact.value,
-            decimals=int(fact.decimals) if fact.decimals and fact.decimals.strip("-").isdigit() else None,
-            dimensions_sig=dim_sig,
-            is_consolidated=is_cons,
-            amendment_flag=amendment_flag,
-            filed_at=filed_at,
-            asof=asof,
-            attrs=attrs,
-        )
-        facts.append(record)
-
-    return facts

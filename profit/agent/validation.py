@@ -23,16 +23,6 @@ AGGREGATION_VALUES = {
 
 MARKET_FIELDS = {"open", "high", "low", "close", "volume", "adj_close", "vwap"}
 DERIVED_FIELDS = {"pct_change", "volume_delta", "avg_spread", "market_depth", "trade_count"}
-COMPANY_FIELDS = {
-    "Revenues",
-    "NetIncome",
-    "EarningsPerShare",
-    "Assets",
-    "Liabilities",
-    "Equity",
-    "CashFlowsFromOperations",
-    "CapitalExpenditures",
-}
 
 
 class AgentValidationError(ValueError):
@@ -119,39 +109,6 @@ def _validate_real_estate_request(entry: dict) -> None:
             raise AgentValidationError(f"{boundary} must be YYYY-MM-DD or null")
 
 
-def _validate_company_facts_request(entry: dict) -> None:
-    required = ["companies", "filings", "fields"]
-    for key in required:
-        if key not in entry:
-            raise AgentValidationError(f"company_facts request missing {key}")
-    companies = entry["companies"]
-    _expect_type(companies, list, "company_facts.companies")
-    if not companies:
-        raise AgentValidationError("company_facts.companies cannot be empty")
-    for company in companies:
-        if not isinstance(company, str) or not (_is_canonical_instrument(company) or _is_cik(company)):
-            raise AgentValidationError(f"invalid company id: {company}")
-
-    filings = entry["filings"]
-    _expect_type(filings, list, "company_facts.filings")
-    if not filings:
-        raise AgentValidationError("company_facts.filings cannot be empty")
-
-    fields = entry["fields"]
-    _expect_type(fields, list, "company_facts.fields")
-    if not fields:
-        raise AgentValidationError("company_facts.fields cannot be empty")
-    for field in fields:
-        _expect_type(field, dict, "company_facts.fields entry")
-        key = field.get("key")
-        if key not in COMPANY_FIELDS:
-            raise AgentValidationError(f"unsupported company_facts field: {key}")
-
-    for boundary in ("start", "end"):
-        value = entry.get(boundary)
-        if value is not None and value != "null" and not isinstance(value, str):
-            raise AgentValidationError(f"{boundary} must be YYYY-MM-DD or null")
-
 
 def _validate_snippet_request(entry: dict) -> None:
     action = entry.get("action")
@@ -207,7 +164,7 @@ def validate_agent_response(payload: Any) -> None:
         if not isinstance(entry, dict):
             raise AgentValidationError("data_request entries must be objects")
         typ = entry.get("type")
-        if typ not in ("market", "real_estate", "company_facts", "snippet"):
+        if typ not in ("market", "real_estate", "snippet"):
             raise AgentValidationError(f"unknown request type: {typ}")
         request_body = entry.get("request")
         if not isinstance(request_body, dict):
@@ -216,8 +173,6 @@ def validate_agent_response(payload: Any) -> None:
             _validate_market_request(request_body)
         elif typ == "real_estate":
             _validate_real_estate_request(request_body)
-        elif typ == "company_facts":
-            _validate_company_facts_request(request_body)
         else:
             _validate_snippet_request(request_body)
 

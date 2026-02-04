@@ -67,30 +67,6 @@ class EntityIdentifierRecord:
 
 
 @dataclass(frozen=True)
-class FinanceFactRecord:
-    """
-    Single fact from a provider filing/report for an entity.
-    """
-
-    entity_id: str
-    provider_id: str
-    provider_entity_id: str
-    record_id: str
-    report_id: str
-    report_key: str
-    period_end: datetime
-    units: str
-    value: float | int | None
-    asof: datetime
-    period_start: datetime | None = None
-    decimals: int | None = None
-    dimensions_sig: str | None = None
-    is_consolidated: bool | None = None
-    amendment_flag: bool | None = None
-    filed_at: datetime | None = None
-    attrs: dict[str, Any] | None = None
-
-
 class DiscoverableFetcher(Protocol):
     """
     Optional mixin for fetchers that can describe their capabilities.

@@ -37,19 +37,6 @@ This API is the "language" the Agent can use to tell us what kind of data to fet
 | `low` | Minimum Price | quote currency | |
 | `close` | Last trade price | quote currency | |
 | `adj_close` | Adjusted Close (splits/dividends) | quote currency | Available for equities/ETFs only. |
-| `volume` | Trading volume | shares/contracts | Provide provider's native unit; call out notional for futures. |
-| `vwap` | Volume-weighted average price | quote currency | Optional; requires per-trade data. |
-
-### Company facts field vocabulary
-
-| Field | Description | Notes |
-| --- | --- | --- |
-| `Revenues`, `NetIncome`, `EarningsPerShare` | US GAAP Base Schema attributes | Use consolidated when `consolidated=true`; fields map 1:1 to normalized taxonomy. |
-| `Assets`, `Liabilities`, `Equity` | Balance sheet components | Specify `period_type` (`Q`, `Y`, `TTM`) in downstream request metadata when relevant. |
-| `CashFlowsFromOperations`, `CapitalExpenditures` | Cash-flow statement rows | Values may be as-reported or restated; denote `restated=true` when requested. |
-
-For `company_facts` requests, provide the desired `filings` (e.g., `10-K`, `10-Q`) and period window. Fields should map to explicit Base Schema keys; missing fields should be treated as error responses unless explicitly allowed by the agent.
-
 ### Error handling expectations
 
 - If an agent requests an unsupported instrument class or field, or if the requested window falls outside cached coverage, the retriever should raise a descriptive validation exception before making network calls. The exception should include the offending key (`instrument`, `field`, `region`, etc.); no silent fallbacks.
@@ -63,8 +50,8 @@ The Agent response can have one request envelope per response.
 
 ```json
 {
-  "data_request": [{   // A list of followup requests.
-    "type": "...",  // one of: "market", "real_estate", "company_facts"
+    "data_request": [{   // A list of followup requests.
+    "type": "...",  // one of: "market", "real_estate", "snippet"
     "notes": "...",  // any context the Agent wants to keep around for this data
     "request": { }  // Contents of the request
   }],
@@ -98,23 +85,6 @@ Use `type: "real_estate"`. Example request:
   "start": "YYYY-MM-DD",     // or null
   "end": "YYYY-MM-DD",       // or null; inclusive; UTC-normalized
   "aggregation": ["7d_avg", "monthly_max"]   // one or more aggregation types to return
-}
-```
-
-### Company Info Request
-
-Use `type: "company_facts"`. Example request:
-
-```json
-{
-  "companies": ["XNAS|AAPL"],   // use canonical id, or CIK
-  "filings": ["10-K", "10-Q"],    // SEC filings
-  "start": "YYYY-MM-DD",          // or null
-  "end": "YYYY-MM-DD",            // or null; inclusive; UTC-normalized
-  "fields": [{
-    "key": "Revenues",    // Field to fetch; generally US GAAP Base Schema fields
-    "consolidated": true,    // If true only returned the consolidated fields
-  }],
 }
 ```
 

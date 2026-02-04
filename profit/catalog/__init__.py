@@ -3,7 +3,6 @@ from profit.catalog.types import (
     EntityIdentifierRecord,
     EntityRecord,
     FetcherDescription,
-    FinanceFactRecord,
     InstrumentRecord,
 )
 from profit.catalog.store import CatalogStore
@@ -21,5 +20,4 @@ __all__ = [
     "InstrumentRecord",
     "EntityRecord",
     "EntityIdentifierRecord",
-    "FinanceFactRecord",
 ]

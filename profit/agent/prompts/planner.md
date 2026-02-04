@@ -8,7 +8,6 @@ schema we define below.
 
 - **market** – Daily OHLCV time series (`open, high, low, close, adj_close, volume`). Timezone: UTC. Coverage varies by instrument.
 - **real_estate** – Fields: `median_sale_price, median_list_price, homes_sold, new_listings, inventory, median_dom, sale_to_list_ratio, price_drops_pct, pending_sales, months_supply, avg_ppsf`, plus `data_revision` and `source_provider`.
-- **company_facts** – Numeric facts keyed by CIK/entity. Facts include `report_id, report_key, value, units, period_start, period_end, filed_at`. Report keys are generally US GAAP Base Schema fields.
 
 ## What you receive
 - User question (free text).
@@ -51,7 +50,7 @@ The API is JSON, and the structure is given by examples, which should be used fo
 {
   "data_request": [
     {
-      "type": "<market|real_estate|company_facts|snippet>",
+      "type": "<market|real_estate|snippet>",
       "notes": "any context for downstream fetchers",
       "request": { ... type-specific payload ... }
     }
