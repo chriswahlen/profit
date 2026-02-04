@@ -82,45 +82,6 @@ def _resolve_entity(store: EntityStore, cik: str) -> str | None:
     return store.find_entity_by_identifier(scheme="sec:cik", value=normalize_cik(cik))
 
 
-def _ensure_marker_table(db: EdgarDatabase) -> None:
-    db.conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS edgar_fact_extract (
-            cik TEXT NOT NULL,
-            accession TEXT NOT NULL,
-            processed_at TEXT NOT NULL,
-            fact_count INTEGER,
-            note TEXT,
-            PRIMARY KEY (cik, accession)
-        )
-        """
-    )
-    db.conn.commit()
-
-
-def _has_processed(db: EdgarDatabase, cik: str, accession: str) -> bool:
-    cur = db.conn.execute(
-        "SELECT 1 FROM edgar_fact_extract WHERE cik = ? AND accession = ?",
-        (normalize_cik(cik), normalize_accession(accession)),
-    )
-    return cur.fetchone() is not None
-
-
-def _mark_processed(db: EdgarDatabase, cik: str, accession: str, fact_count: int, note: str | None) -> None:
-    db.conn.execute(
-        """
-        INSERT INTO edgar_fact_extract (cik, accession, processed_at, fact_count, note)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(cik, accession) DO UPDATE SET
-            processed_at=excluded.processed_at,
-            fact_count=excluded.fact_count,
-            note=excluded.note
-        """,
-        (normalize_cik(cik), normalize_accession(accession), datetime.now(timezone.utc).isoformat(), fact_count, note),
-    )
-    db.conn.commit()
-
-
 def _load_source_url(db: EdgarDatabase, accession: str) -> dict[str, str | None]:
     info = db.get_accession_files_info(accession)
     return {name: url for name, url in info}
@@ -199,7 +160,7 @@ def _process_accession(
         logging.warning("missing entity for cik=%s; skip accession=%s", provider_entity_id, accession)
         return 0
 
-    if not force and _has_processed(db, provider_entity_id, accession):
+    if not force and db.has_processed_xbrl_facts(provider_entity_id, accession):
         logging.info("skip accession=%s (already processed); use --force to reprocess", accession)
         return 0
 
@@ -269,7 +230,7 @@ def _process_accession(
             exc,
         )
         raise
-    _mark_processed(db, provider_entity_id, accession, written, report_id)
+    db.mark_xbrl_facts_processed(provider_entity_id, accession, written, report_id)
     logging.info("written facts=%s accession=%s", written, accession)
     return written
 
@@ -297,7 +258,7 @@ def main() -> None:
     cfg = _profit_cfg(args)
     edgar_db_path = args.edgar_db or cfg.data_root / "edgar.sqlite3"
     edgar_db = EdgarDatabase(edgar_db_path)
-    _ensure_marker_table(edgar_db)
+    edgar_db.ensure_fact_marker_table()
     store = EntityStore(cfg.store_path)
 
     logging.info(

@@ -35,6 +35,8 @@ def test_parse_xbrl_extracts_numeric_facts():
     assert assets.context_ref == "c1"
     assert assets.unit_ref == "USD"
     assert assets.value == 12345.67
+    assert assets.lexical_value.strip() == "12345.67"
+    assert assets.is_nil == 0
 
     assert len(parsed.unparsed) == 1
     assert parsed.unparsed[0]["tag"] == "nonNumeric"

@@ -10,6 +10,7 @@ presentation/calculation/linkbase data.
 
 import logging
 import hashlib
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
@@ -28,6 +29,8 @@ INVALID_CONTEXT_LOG_LIMIT = 20
 @dataclass(frozen=True)
 class ParsedContext:
     id: str
+    entity_scheme: str | None
+    entity_id: str | None
     period_start: datetime | None
     period_end: datetime | None
     period_type: str  # "instant" or "duration" or "unknown"
@@ -37,6 +40,13 @@ class ParsedContext:
 class ParsedUnit:
     id: str
     measures: List[str]
+
+
+@dataclass(frozen=True)
+class ParsedDimension:
+    axis: str
+    member: str | None
+    typed_value: str | None
 
 # --- Dimensions helpers -----------------------------------------------------
 
@@ -107,6 +117,37 @@ def _context_dimensions(root: ET.Element) -> Dict[str, tuple[str, bool, str]]:
         ctx_dims[ctx_id] = (dim_sig, False, canonical_dim_string)
     return ctx_dims
 
+
+def parse_context_dimensions(root: ET.Element) -> Dict[str, list[ParsedDimension]]:
+    dims: dict[str, list[ParsedDimension]] = defaultdict(list)
+    for ctx in root.findall(".//{http://www.xbrl.org/2003/instance}context"):
+        ctx_id = ctx.get("id")
+        if not ctx_id:
+            continue
+        for section in ("segment", "scenario"):
+            container = ctx.find(f"{{http://www.xbrl.org/2003/instance}}{section}")
+            if container is None:
+                continue
+            dims[ctx_id].extend(_collect_dimensions(container))
+    return dims
+
+
+def _collect_dimensions(container: ET.Element) -> list[ParsedDimension]:
+    entries: list[ParsedDimension] = []
+    for member in container.findall(".//{http://xbrl.org/2006/xbrldi}explicitMember"):
+        axis = _normalize_qname(member.get("dimension"))
+        member_val = _normalize_qname((member.text or "").strip())
+        if axis and member_val:
+            entries.append(ParsedDimension(axis=axis, member=member_val, typed_value=None))
+    for member in container.findall(".//{http://xbrl.org/2006/xbrldi}typedMember"):
+        axis = _normalize_qname(member.get("dimension"))
+        if not axis:
+            continue
+        entries.append(
+            ParsedDimension(axis=axis, member=None, typed_value=_canonicalize_typed_member(member))
+        )
+    return entries
+
 # --- Parsing helpers -------------------------------------------------------
 
 
@@ -133,6 +174,10 @@ def parse_contexts(root: ET.Element) -> Dict[str, ParsedContext]:
         ctx_id = elem.get("id")
         if not ctx_id:
             continue
+        entity_node = elem.find("{http://www.xbrl.org/2003/instance}entity")
+        identifier_node = entity_node.find("{http://www.xbrl.org/2003/instance}identifier") if entity_node is not None else None
+        entity_scheme = identifier_node.get("scheme") if identifier_node is not None else None
+        entity_id = (identifier_node.text or "").strip() if identifier_node is not None and identifier_node.text else None
         period_node = elem.find("{http://www.xbrl.org/2003/instance}period")
         period_start: datetime | None = None
         period_end: datetime | None = None
@@ -151,7 +196,14 @@ def parse_contexts(root: ET.Element) -> Dict[str, ParsedContext]:
         if period_end is None:
             invalid.append(ctx_id)
             continue
-        contexts[ctx_id] = ParsedContext(id=ctx_id, period_start=period_start, period_end=period_end, period_type=period_type)
+        contexts[ctx_id] = ParsedContext(
+            id=ctx_id,
+            entity_scheme=entity_scheme,
+            entity_id=entity_id,
+            period_start=period_start,
+            period_end=period_end,
+            period_type=period_type,
+        )
     if invalid:
         logger.warning(
             "xbrl contexts missing usable period_end count=%s examples=%s",
@@ -179,7 +231,7 @@ def parse_units(root: ET.Element) -> Dict[str, ParsedUnit]:
 # --- Unit normalization -----------------------------------------------------
 
 
-def _normalize_unit(measures: Iterable[str]) -> str | None:
+def normalize_unit(measures: Iterable[str]) -> str | None:
     # Simple mapping: ISO 4217 currencies, shares, pure.
     for m in measures:
         lower = m.lower()
@@ -252,7 +304,7 @@ def extract_finance_facts(
             continue  # cannot place the fact in time
         dim_sig, is_cons, canonical_dims = ctx_dims.get(fact.context_ref or "", ("", True, ""))
         unit = units.get(fact.unit_ref or "")
-        normalized_unit = _normalize_unit(unit.measures) if unit else None
+        normalized_unit = normalize_unit(unit.measures) if unit else None
         if normalized_unit is None:
             continue
 

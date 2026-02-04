@@ -23,6 +23,8 @@ class ParsedFact:
     decimals: str | None
     id: str | None
     attrs: dict[str, str]
+    lexical_value: str
+    is_nil: int
 
 
 @dataclass(frozen=True)
@@ -40,16 +42,17 @@ def _parse_float(text: str | None) -> Optional[float]:
         return None
 
 
-def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
+def parse_xbrl(xml_bytes: bytes, *, root: ET.Element | None = None) -> ParsedXbrl:
     """
     Minimal XBRL extractor:
     - Finds numeric facts (xbrli:context/xbrli:unit aware) where text parses to float.
     - Anything numeric-looking that fails parse or is not numeric is recorded in `unparsed`.
     """
-    try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as exc:
-        raise ValueError(f"invalid XML: {exc}") from exc
+    if root is None:
+        try:
+            root = ET.fromstring(xml_bytes)
+        except ET.ParseError as exc:
+            raise ValueError(f"invalid XML: {exc}") from exc
 
     facts: list[ParsedFact] = []
     unparsed: list[dict[str, str]] = []
@@ -76,6 +79,9 @@ def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
         decimals = attrs.get("decimals")
         context_ref = attrs.get("contextRef")
         fact_id = attrs.get("id")
+        nil_attr = attrs.get("xsi:nil") or attrs.get("{http://www.w3.org/2001/XMLSchema-instance}nil")
+        is_nil = 1 if nil_attr and nil_attr.lower() in {"1", "true"} else 0
+        lexical_value = inner_html or text_raw
 
         val = _parse_float(text)
         if val is not None:
@@ -88,6 +94,8 @@ def parse_xbrl(xml_bytes: bytes) -> ParsedXbrl:
                     decimals=decimals,
                     id=fact_id,
                     attrs=attrs,
+                    lexical_value=lexical_value,
+                    is_nil=is_nil,
                 )
             )
         else:
