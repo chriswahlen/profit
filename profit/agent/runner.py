@@ -73,11 +73,11 @@ class AgentRunner:
             except AgentValidationError as exc:
                 snippet = self._make_snippet(response.text)
                 logger.warning(
-                    "agent validation failed (%s); response snippet=%s",
+                    "agent validation failed (%s); returning raw response as final_text. snippet=%s",
                     exc,
                     snippet,
                 )
-                raise
+                return response
 
             last_parsed = parsed
             last_response_text = response.text
@@ -146,7 +146,59 @@ class AgentRunner:
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
+            sanitized = self._sanitize_json_text(text)
+            if sanitized is not None:
+                logger.warning(
+                    "agent response appeared malformed; applied sanitization and retrying parse"
+                )
+                try:
+                    return json.loads(sanitized)
+                except json.JSONDecodeError:
+                    pass
             raise AgentValidationError("agent response is not valid JSON") from exc
+
+    def _sanitize_json_text(self, text: str) -> str | None:
+        sanitized = text
+        changed = False
+        for field in ("agent_response", "final_response"):
+            new_text, field_changed = self._sanitize_string_field(sanitized, field)
+            sanitized = new_text
+            changed = changed or field_changed
+        return sanitized if changed else None
+
+    def _sanitize_string_field(self, text: str, field: str) -> tuple[str, bool]:
+        key = f'"{field}"'
+        idx = text.find(key)
+        if idx == -1:
+            return text, False
+        colon = text.find(":", idx + len(key))
+        if colon == -1:
+            return text, False
+        quote_start = text.find('"', colon)
+        if quote_start == -1:
+            return text, False
+        i = quote_start + 1
+        escaped = False
+        end_quote = -1
+        while i < len(text):
+            ch = text[i]
+            if ch == '"' and not escaped:
+                end_quote = i
+                break
+            if ch == "\\":
+                escaped = not escaped
+            else:
+                escaped = False
+            i += 1
+        if end_quote < 0:
+            return text, False
+        content = text[quote_start + 1:end_quote]
+        try:
+            decoded = json.loads(f'"{content}"')
+        except json.JSONDecodeError:
+            decoded = content
+        sanitized_value = json.dumps(decoded)
+        return text[:quote_start] + sanitized_value + text[end_quote + 1 :], True
 
     def _log_data_needs(self, needs: Iterable[Mapping[str, Any]] | None) -> None:
         if not needs:

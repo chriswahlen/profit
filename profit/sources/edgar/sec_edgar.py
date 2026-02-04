@@ -11,6 +11,7 @@ provider-aware logging).
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, Mapping, Sequence
@@ -19,16 +20,56 @@ from profit.cache import FileCache
 from profit.config import ProfitConfig, get_setting
 from profit.sources.batch_fetcher import BatchFetcher
 from profit.sources.types import Fingerprintable
-from profit.utils.url_fetcher import FetchFn, fetch_url
+from profit.utils.url_fetcher import FetchFn, TemporaryFetchError, fetch_url
 from .common import SEC_UA_ENV, normalize_cik, normalize_accession
 
 logger = logging.getLogger(__name__)
+
+MAX_TEMP_RETRIES = 20
+BACKOFF_INITIAL = 0.5
+BACKOFF_MAX = 30.0
 
 
 SEC_PROVIDER_ID = "sec:edgar"
 SUBMISSIONS_URL_TMPL = "https://data.sec.gov/submissions/CIK{cik}.json"
 DEFAULT_TTL = timedelta(days=1)
 FILINGS_FIELDS = ("accessionNumber", "form", "filingDate", "primaryDocument", "reportDate")
+
+
+def _fetch_with_retry(
+    url: str,
+    *,
+    cache: FileCache,
+    ttl: timedelta,
+    allow_network: bool,
+    headers: Mapping[str, str],
+    fetch_fn: FetchFn | None,
+) -> bytes:
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            return fetch_url(
+                url,
+                cache=cache,
+                ttl=ttl,
+                allow_network=allow_network,
+                headers=headers,
+                fetch_fn=fetch_fn,
+            )
+        except TemporaryFetchError as exc:
+            if attempts >= MAX_TEMP_RETRIES:
+                logger.error("edgar fetch retries exhausted url=%s status=%s", url, exc.status)
+                raise
+            delay = min(BACKOFF_INITIAL * 2 ** (attempts - 1), BACKOFF_MAX)
+            logger.warning(
+                "temporary edgar fetch failure url=%s status=%s attempt=%d; sleeping %.1fs",
+                url,
+                exc.status,
+                attempts,
+                delay,
+            )
+            time.sleep(delay)
 
 
 def _normalize_cik(raw: str | int) -> str:
@@ -120,7 +161,7 @@ class EdgarSubmissionsFetcher(BatchFetcher[EdgarSubmissionsRequest, EdgarSubmiss
             "User-Agent": self.user_agent,
             "Accept": "application/json",
         }
-        payload = fetch_url(
+        payload = _fetch_with_retry(
             url,
             cache=self.cache,
             ttl=self.ttl,
@@ -177,7 +218,7 @@ def _fetch_paged_filings(base_url: str, base_payload: Mapping[str, object], *, c
             continue
         logger.info("edgar submissions fetching page file name=%s base=%s", name, base_url)
         page_url = prefix + str(name)
-        page_payload = fetch_url(
+        page_payload = _fetch_with_retry(
             page_url,
             cache=cache,
             ttl=ttl,

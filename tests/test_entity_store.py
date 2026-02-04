@@ -122,6 +122,30 @@ def test_resolve_entity_id_uses_identifiers(tmp_path):
     assert store.resolve_entity_id("AaPl") == "company:nasdaq:aapl"
 
 
+def test_resolve_identifier_supports_scheme_and_provider(tmp_path):
+    store = EntityStore(tmp_path / "entities.sqlite3")
+    store.upsert_entities(
+        [
+            EntityRecord(entity_id="company:nasdaq:aapl", entity_type="company", name="Apple Inc."),
+        ]
+    )
+    store.upsert_providers([("sec:edgar", "SEC EDGAR", None)])
+    store.upsert_identifiers(
+        [
+            EntityIdentifierRecord(
+                entity_id="company:nasdaq:aapl",
+                scheme="sec:cik",
+                value="0000320193",
+                provider_id="sec:edgar",
+                last_seen=datetime(2025, 2, 1, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+
+    assert store.resolve_identifier("company:nasdaq:aapl", "sec:cik") == "0000320193"
+    assert store.resolve_identifier("company:nasdaq:aapl", "sec:cik", provider_id="sec:edgar") == "0000320193"
+
+
 def test_list_finance_facts_respects_filings(tmp_path):
     store = EntityStore(tmp_path / "entities.sqlite3")
     store.upsert_providers([("sec:edgar", "SEC EDGAR", None)])

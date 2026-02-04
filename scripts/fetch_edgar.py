@@ -22,6 +22,8 @@ from profit.sources.edgar import (
     should_skip_accession_file,
 )
 from profit.sources.types import LifecycleReader
+from profit.catalog.entity_store import EntityStore
+from profit.catalog.identifier_utils import resolve_cik_from_identifier
 from profit.catalog.refresher import CatalogChecker
 from profit.utils.url_fetcher import PermanentFetchError
 
@@ -116,9 +118,20 @@ def _profit_cfg(args) -> ProfitConfig:
     )
 
 
+def _resolve_target_cik(identifier: str, cfg: ProfitConfig) -> str:
+    store = EntityStore(cfg.store_path, readonly=True)
+    try:
+        cik = resolve_cik_from_identifier(store, identifier)
+    finally:
+        store.close()
+    if not cik:
+        raise SystemExit(f"Unable to resolve CIK for identifier {identifier!r}")
+    return cik
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch SEC EDGAR submissions for a CIK")
-    parser.add_argument("cik", help="CIK (with or without leading zeros)")
+    parser.add_argument("cik", help="Identifier (CIK, ticker, or canonical exchange|ticker such as XNAS|AAPL)")
     parser.add_argument(
         "--user-agent",
         help="User-Agent for SEC requests (falls back to PROFIT_SEC_USER_AGENT env)",
@@ -164,6 +177,7 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
 
     cfg = _profit_cfg(args)
+    target_cik = _resolve_target_cik(args.cik, cfg)
     cache = FileCache(base_dir=cfg.cache_root / "edgar_fetcher", ttl=timedelta(minutes=args.ttl_minutes))
     edgar_db = EdgarDatabase(cfg.data_root / "edgar.sqlite3")
     debug_dumps = args.debug_dumps
@@ -228,7 +242,7 @@ def main() -> None:
             user_agent=ua,
         )
 
-        req = EdgarSubmissionsRequest(args.cik)
+        req = EdgarSubmissionsRequest(target_cik)
         print("FETCHING")
         result = fetcher.fetch(req)
         edgar_db.record_submissions(result.cik, result.entity_name, result.raw)

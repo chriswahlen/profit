@@ -265,6 +265,20 @@ class EntityStore:
             return row["entity_id"]
         return None
 
+    def resolve_identifier(self, entity_id: str, scheme: str, *, provider_id: str | None = None) -> str | None:
+        """
+        Return the most recent identifier value for the given entity_id/scheme pair.
+        """
+        query = "SELECT value FROM entity_identifier WHERE entity_id = ? AND scheme = ?"
+        params: list[str] = [entity_id, scheme]
+        if provider_id:
+            query += " AND provider_id = ?"
+            params.append(provider_id)
+        query += " ORDER BY last_seen DESC LIMIT 1"
+        cur = self.conn.execute(query, params)
+        row = cur.fetchone()
+        return row["value"] if row else None
+
     def list_finance_facts(
         self,
         entity_id: str,
