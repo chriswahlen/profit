@@ -11,3 +11,4 @@
 
 ### Scripts
 - `scripts/fetch_yfinance.py`: fetch daily OHLCV for tickers in a date window into the columnar store.
+- `scripts/list_edgar_assets.py`: report what accessions and files for a resolved company CIK are cached in `data/edgar.sqlite3`; defaults read PROFIT_DATA_ROOT/`~/.profit.conf`, with `--data-root`, `--profit-db`, `--edgar-db`, and `--output-path` overrides to export the files.
