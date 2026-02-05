@@ -1,5 +1,14 @@
 # Agent Flow
 
+## Agent Flow v2 (spec)
+
+An updated, two-phase **fluid + anchored** planning spec (ticker + MIC, date-only windows, separate compiler step) lives in:
+
+- `docs/agent_v2/flow.md`
+- `docs/agent_v2/api.md`
+
+Runtime implementation lives in `profit/agent_v2` and can be driven via `scripts/ask_agent_v2.py`.
+
 ## Definitions
 
 Agent: This is the LLM, so when we say "The Agent decides X", we mean whatever LLM we call/use.

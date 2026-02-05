@@ -2,6 +2,9 @@
 
 This API is the "language" the Agent can use to tell us what kind of data to fetch.
 
+Note: A newer, independent agent API (v2) is documented in `docs/agent_v2/api.md` and implemented in `profit/agent_v2`.
+This file remains the canonical contract for the legacy `profit/agent` runtime.
+
 ## Definitions
 
 - Companies: Refer to by their exchange and ticker, e.g.:  "XNAS|AAPL"
