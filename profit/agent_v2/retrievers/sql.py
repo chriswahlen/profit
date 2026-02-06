@@ -125,8 +125,14 @@ class SqlRetrieverV2:
             "dataset": dataset,
             "columns": columns,
             "rows": rows,
-            "meta": {"elapsed_ms": elapsed_ms, "max_rows": params.max_rows, "timeout_ms": params.timeout_ms},
+            "meta": {
+                "elapsed_ms": elapsed_ms,
+                "max_rows": params.max_rows,
+                "timeout_ms": params.timeout_ms,
+                "concept_aliases": params.concept_aliases,
+            },
         }
+        if params.concept_aliases:
+            payload["meta"]["concept_aliases"] = params.concept_aliases
         logger.info("sql_v2 dataset=%s rows=%s elapsed_ms=%s", dataset, len(rows), elapsed_ms)
         return SqlResult(payload=payload, data_needs=[])
-

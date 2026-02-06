@@ -235,12 +235,21 @@ class EdgarDatabase:
             CREATE INDEX IF NOT EXISTS idx_fact_context ON xbrl_fact(context_id);
             """
         )
+        self._ensure_xbrl_context_columns()
 
     def _ensure_accession_file_url_column(self) -> None:
         cur = self.conn.execute("PRAGMA table_info(edgar_accession_file)")
         columns = {row["name"] for row in cur.fetchall()}
         if "source_url" not in columns:
             self.conn.execute("ALTER TABLE edgar_accession_file ADD COLUMN source_url TEXT")
+
+    def _ensure_xbrl_context_columns(self) -> None:
+        cur = self.conn.execute("PRAGMA table_info(xbrl_context)")
+        columns = {row["name"] for row in cur.fetchall()}
+        if "entity_scheme_id" not in columns:
+            self.conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_scheme_id INTEGER")
+        if "entity_id" not in columns:
+            self.conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_id TEXT")
 
     def close(self) -> None:
         if self._owns_conn:

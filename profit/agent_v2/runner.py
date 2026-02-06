@@ -13,10 +13,11 @@ from profit.agent_v2.data_formatter import format_data_block
 from profit.agent_v2.exceptions import AgentV2Error, AgentV2ValidationError
 from profit.agent_v2.insights import InsightLookup, InsightsManager
 from profit.agent_v2.models import EdgarAnchor, RetrievalPlan, Step1Payload
-from profit.agent_v2.retrievers import MarketRetrieverV2, SqlRetrieverV2
+from profit.agent_v2.retrievers import EdgarRetrieverV2, MarketRetrieverV2, RealEstateRetrieverV2
 from profit.agent_v2.validation import parse_step1, parse_step2
 from profit.catalog.entity_store import EntityStore
 from profit.catalog.identifier_utils import resolve_cik_from_identifier
+from profit.agent_v2.concepts import METRIC_CONCEPT_ALIASES
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,12 @@ def _now_iso() -> str:
 @dataclass(frozen=True)
 class AgentV2RunnerConfig:
     planner_path: Path = Path("profit/agent_v2/prompts/planner.md")
-    compiler_path: Path = Path("profit/agent_v2/prompts/compiler.md")
+    compiler_paths: tuple[Path, ...] = (
+        Path("profit/agent_v2/prompts/compiler.md"),
+        Path("profit/agent_v2/prompts/compiler_market.md"),
+        Path("profit/agent_v2/prompts/compiler_edgar.md"),
+        Path("profit/agent_v2/prompts/compiler_real_estate.md"),
+    )
     iteration_limit: int = 5
     entity_db_path: Path = Path("data/profit.sqlite")
 
@@ -40,15 +46,17 @@ class AgentV2Runner:
         config: AgentV2RunnerConfig | None = None,
         *,
         market: MarketRetrieverV2 | None = None,
-        sql: SqlRetrieverV2 | None = None,
+        edgar: EdgarRetrieverV2 | None = None,
+        real_estate: RealEstateRetrieverV2 | None = None,
         insights: InsightsManager | None = None,
     ) -> None:
         self.llm = llm
         self.config = config or AgentV2RunnerConfig()
         self._planner_text: str | None = None
-        self._compiler_text: str | None = None
+        self._compiler_texts: list[str] | None = None
         self.market = market or MarketRetrieverV2()
-        self.sql = sql or SqlRetrieverV2()
+        self.edgar = edgar or EdgarRetrieverV2()
+        self.real_estate = real_estate or RealEstateRetrieverV2()
         self.insights = insights or InsightsManager()
 
     def run(
@@ -131,9 +139,13 @@ class AgentV2Runner:
         return "\n\n".join(parts)
 
     def _build_compiler_prompt(self, *, step1: Step1Payload, cik_map: dict[str, str]) -> str:
-        parts: list[str] = [self._load_compiler()]
+        parts: list[str] = []
+        for section in self._load_compiler_sections():
+            parts.append(section)
         if cik_map:
             parts.append("ENTITY_RESOLUTION\n" + json.dumps(cik_map, indent=2, sort_keys=True))
+        concept_map_json = json.dumps(METRIC_CONCEPT_ALIASES, indent=2, sort_keys=True)
+        parts.append("METRIC_CONCEPT_ALIASES\n" + concept_map_json)
         parts.append("STEP1_JSON\n" + json.dumps(step1.model_dump(), indent=2, sort_keys=True))
         return "\n\n".join(parts)
 
@@ -142,10 +154,13 @@ class AgentV2Runner:
             self._planner_text = self.config.planner_path.read_text(encoding="utf-8")
         return self._planner_text
 
-    def _load_compiler(self) -> str:
-        if self._compiler_text is None:
-            self._compiler_text = self.config.compiler_path.read_text(encoding="utf-8")
-        return self._compiler_text
+    def _load_compiler_sections(self) -> list[str]:
+        if self._compiler_texts is None:
+            sections: list[str] = []
+            for path in self.config.compiler_paths:
+                sections.append(path.read_text(encoding="utf-8"))
+            self._compiler_texts = sections
+        return self._compiler_texts
 
     def _resolve_ciks(self, step1: Step1Payload) -> dict[str, str]:
         edgar_anchors: list[EdgarAnchor] = [a for a in step1.anchors if isinstance(a, EdgarAnchor)]
@@ -200,11 +215,13 @@ class AgentV2Runner:
         for batch in plan.batches:
             for req in batch.requests:
                 if req.type == "market_ohlcv":
-                    result = self.market.fetch(req)
-                    payloads.append(result.payload)
+                    payloads.append(self.market.fetch(req).payload)
+                elif req.type == "edgar_xbrl":
+                    payloads.append(self.edgar.fetch(req).payload)
+                elif req.type == "real_estate":
+                    payloads.append(self.real_estate.fetch(req).payload)
                 else:
-                    result = self.sql.fetch(req)
-                    payloads.append(result.payload)
+                    raise AgentV2Error(f"unknown request type: {req.type}")
         return payloads
 
     def _lookup_insights(self, step1: Step1Payload) -> list[SnippetSummary]:

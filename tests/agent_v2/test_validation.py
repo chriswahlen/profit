@@ -58,7 +58,7 @@ def test_step1_accepts_final_answer_when_answered():
     assert parsed.final_answer == "Answer text."
 
 
-def test_step2_rejects_sql_without_limit():
+def test_step2_requires_concept_aliases_for_edgar():
     payload = {
         "entity_resolution_report": [],
         "batches": [
@@ -67,15 +67,15 @@ def test_step2_rejects_sql_without_limit():
                 "purpose": "edgar",
                 "requests": [
                     {
-                        "request_id": "q1",
-                        "type": "sql",
-                        "dataset": "edgar",
+                        "request_id": "edgar_q1",
+                        "type": "edgar_xbrl",
                         "params": {
-                            "dialect": "sqlite",
-                            "read_only": True,
-                            "sql": "SELECT 1",
-                            "timeout_ms": 10000,
-                            "max_rows": 10,
+                            "cik": "0001652044",
+                            "start_utc": "2024-01-01",
+                            "end_utc": "2024-06-01",
+                            "period_type": "duration",
+                            "concept_aliases": [],
+                            "limit": 100,
                         },
                     }
                 ],
@@ -86,7 +86,7 @@ def test_step2_rejects_sql_without_limit():
         parse_step2(json.dumps(payload))
 
 
-def test_step2_accepts_sql_with_limit():
+def test_step2_accepts_valid_edgar_request():
     payload = {
         "entity_resolution_report": [],
         "batches": [
@@ -95,15 +95,15 @@ def test_step2_accepts_sql_with_limit():
                 "purpose": "edgar",
                 "requests": [
                     {
-                        "request_id": "q1",
-                        "type": "sql",
-                        "dataset": "edgar",
+                        "request_id": "edgar_q1",
+                        "type": "edgar_xbrl",
                         "params": {
-                            "dialect": "sqlite",
-                            "read_only": True,
-                            "sql": "SELECT 1 LIMIT 10",
-                            "timeout_ms": 10000,
-                            "max_rows": 10,
+                            "cik": "0001652044",
+                            "start_utc": "2024-01-01",
+                            "end_utc": "2024-06-01",
+                            "period_type": "duration",
+                            "concept_aliases": ["CapitalExpenditures"],
+                            "limit": 100,
                         },
                     }
                 ],
@@ -111,5 +111,4 @@ def test_step2_accepts_sql_with_limit():
         ],
     }
     parsed = parse_step2(json.dumps(payload))
-    assert parsed.batches[0].requests[0].request_id == "q1"
-
+    assert parsed.batches[0].requests[0].type == "edgar_xbrl"

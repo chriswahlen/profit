@@ -65,8 +65,12 @@ def _validate_step2(plan: RetrievalPlan) -> None:
         for request in batch.requests:
             if request.type == "market_ohlcv":
                 _validate_date_range(request.params.start_utc, request.params.end_utc, f"request[{request.request_id}].params")
+            elif request.type == "edgar_xbrl":
+                _validate_date_range(request.params.start_utc, request.params.end_utc, f"request[{request.request_id}].params")
+                if not request.params.concept_aliases:
+                    raise AgentV2ValidationError("edgar_xbrl requests must provide at least one concept_alias")
             else:
-                _validate_sql(request.params.sql, request.params.max_rows, f"request[{request.request_id}].sql")
+                _validate_date_range(request.params.start_utc, request.params.end_utc, f"request[{request.request_id}].params")
 
 
 def _ensure_unique(values: list[str], label: str) -> None:
@@ -103,4 +107,3 @@ def _validate_sql(sql: str, max_rows: int, label: str) -> None:
         raise AgentV2ValidationError(f"{label} contains disallowed statement/keyword")
     if "limit" not in sql.lower():
         raise AgentV2ValidationError(f"{label} must include LIMIT (max_rows={max_rows})")
-

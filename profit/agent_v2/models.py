@@ -171,22 +171,38 @@ class MarketOhlcvRequest(V2BaseModel):
     timeout_ms: int | None = Field(default=None, ge=1000, le=300000)
 
 
-class SqlParams(V2BaseModel):
-    dialect: Literal["sqlite", "postgres"]
-    read_only: Literal[True]
-    sql: str = Field(min_length=1)
-    timeout_ms: int = Field(ge=1000, le=300000)
-    max_rows: int = Field(ge=1, le=200000)
+class EdgarRequestParams(V2BaseModel):
+    cik: str = Field(min_length=1)
+    start_utc: str
+    end_utc: str
+    period_type: Literal["duration", "instant"]
+    concept_aliases: list[str] = Field(min_length=1)
+    limit: int = Field(ge=1, le=10000)
 
 
-class SqlRequest(V2BaseModel):
+class EdgarRequest(V2BaseModel):
     request_id: str = Field(min_length=1)
-    type: Literal["sql"]
-    dataset: Literal["edgar", "real_estate"]
-    params: SqlParams
+    type: Literal["edgar_xbrl"]
+    params: EdgarRequestParams
+    timeout_ms: int | None = Field(default=None, ge=1000, le=300000)
 
 
-Request = Annotated[MarketOhlcvRequest | SqlRequest, Field(discriminator="type")]
+class RealEstateRequestParams(V2BaseModel):
+    geo_id: str = Field(min_length=1, max_length=128)
+    start_utc: str
+    end_utc: str
+    measures: list[str] = Field(min_length=1)
+    aggregation: list[str] = Field(min_length=1)
+
+
+class RealEstateRequest(V2BaseModel):
+    request_id: str = Field(min_length=1)
+    type: Literal["real_estate"]
+    params: RealEstateRequestParams
+    timeout_ms: int | None = Field(default=None, ge=1000, le=300000)
+
+
+Request = Annotated[MarketOhlcvRequest | EdgarRequest | RealEstateRequest, Field(discriminator="type")]
 
 
 class Batch(V2BaseModel):
@@ -199,4 +215,3 @@ class Batch(V2BaseModel):
 class RetrievalPlan(V2BaseModel):
     entity_resolution_report: list[EntityResolution] = Field(default_factory=list)
     batches: list[Batch] = Field(min_length=1)
-
