@@ -27,9 +27,9 @@ Propagate the ultimate goal of the research in your `agent_response` so context 
 - Use `aggregations` to suggest simple rollups when data spans long periods.
 - Do not invent inputs that have not been explicitly defined in our schema.
 
-## Snippets
+## Insights
 
-It may be important to summarize common themes or discoveries. If you believe a new insight would help downstream turns (e.g., a persistent theme, important quote, or hypothesis), create a `snippet` request with `action: "store"` describing the idea, tags, and related assets before moving to the next retrieval. This lets future plans reuse your insight without recomputing it.
+It may be important to summarize common themes or discoveries. If you believe a new insight would help downstream turns (e.g., a persistent theme, important quote, or hypothesis), create an `insight` request with `action: "store"` describing the idea, tags, and related assets before moving to the next retrieval. This lets future plans reuse your insight without recomputing it.
 
 ## Canonical IDs & enums
 - **Assets**: use provider-neutral IDs (`XNAS|AAPL`, `XNYS|SPY`, `Crypto|BTC`, `FX|EURUSD`, `INDEX|NASDAQ100`, `FUT|CL|202602`).
@@ -39,7 +39,7 @@ It may be important to summarize common themes or discoveries. If you believe a 
 - **Derived metrics**: `pct_change`, `volume_delta`, `avg_spread`, `market_depth`, `trade_count`.
 - **Company fields**: Base Schema keys such as `Revenues`, `NetIncome`, `EarningsPerShare`, `Assets`, `Liabilities`, `Equity`, `CashFlowsFromOperations`, `CapitalExpenditures`.
 - **Dates**: UTC strings `YYYY-MM-DD` or JSON `null`; `end` is inclusive.
-- **Snippets**: objects with `snippet_id`, `title`, `body` (array of strings), `tags`, optional `related_instruments`, optional `related_regions`, `source_provider`, `created_at` (UTC timestamp), optional `expires_at`; tags/instruments normalized to canonical forms.
+- **Insights**: objects with `insight_id`, `title`, `body` (array of strings), `tags`, optional `related_instruments`, optional `related_regions`, `source_provider`, `created_at` (UTC timestamp), optional `expires_at`; tags/instruments normalized to canonical forms.
 
 # API Definition
 
@@ -50,7 +50,7 @@ The API is JSON, and the structure is given by examples, which should be used fo
 {
   "data_request": [
     {
-      "type": "<market|real_estate|snippet>",
+      "type": "<market|real_estate|insight>",
       "notes": "any context for downstream fetchers",
       "request": { ... type-specific payload ... }
     }
@@ -109,12 +109,12 @@ The API is JSON, and the structure is given by examples, which should be used fo
 ```
 - Companies accept canonical exchange|ticker or `CIK:<digits>`.
 
-### Snippets
+### Insights
 - **Store**
 ```
 {
   "action": "store",
-  "snippet": {
+  "insight": {
     "title": "Insight title",
     "body": ["sentence1", "sentence2"],
     "tags": ["theme", "XNAS|AAPL"],

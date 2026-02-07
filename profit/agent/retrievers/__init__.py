@@ -3,7 +3,7 @@ from __future__ import annotations
 from .base import BaseRetriever, RetrieverResult
 from .market import MarketRetriever
 from .real_estate import RealEstateRetriever
-from .snippet import SnippetRetriever
+from .insight import InsightRetriever
 from .registry import RetrieverRegistry
 
 __all__ = [
@@ -11,6 +11,6 @@ __all__ = [
     "RetrieverResult",
     "MarketRetriever",
     "RealEstateRetriever",
-    "SnippetRetriever",
+    "InsightRetriever",
     "RetrieverRegistry",
 ]

@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from profit.agent.retrievers.market import MarketRetriever
 from profit.agent.retrievers.real_estate import RealEstateRetriever
-from profit.agent.retrievers.snippet import SnippetRetriever
-from profit.agent.snippets import SnippetStore
+from profit.agent.retrievers.insight import InsightRetriever
+from profit.agent.insights import InsightStore
 from profit.agent.retrievers.base import BaseRetriever
 
 
 class RetrieverRegistry:
-    def __init__(self, *, snippet_store: SnippetStore | None = None) -> None:
-        store = snippet_store or SnippetStore()
+    def __init__(self, *, insight_store: InsightStore | None = None) -> None:
+        store = insight_store or InsightStore()
         self._registry: dict[str, BaseRetriever] = {
             "market": MarketRetriever(),
             "real_estate": RealEstateRetriever(),
-            "snippet": SnippetRetriever(store=store),
+            "insight": InsightRetriever(store=store),
         }
 
     def get(self, key: str) -> BaseRetriever:

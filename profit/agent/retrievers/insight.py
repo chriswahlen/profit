@@ -1,28 +1,24 @@
 from __future__ import annotations
 
-import logging
-
 from profit.agent.retrievers.base import BaseRetriever, RetrieverResult
-from profit.agent.snippets import SnippetStore
-from profit.agent.types import SnippetSummary
-
-logger = logging.getLogger(__name__)
+from profit.agent.insights import InsightStore
+from profit.agent.types import InsightSummary
 
 
-class SnippetRetriever(BaseRetriever):
-    def __init__(self, store: SnippetStore | None = None) -> None:
-        self.store = store or SnippetStore()
+class InsightRetriever(BaseRetriever):
+    def __init__(self, store: InsightStore | None = None) -> None:
+        self.store = store or InsightStore()
 
     def fetch(self, request: dict, *, notes: str | None = None) -> RetrieverResult:
         action = request.get("action")
         if action == "store":
-            snippet = request["snippet"]
-            normalized_snippet = self._normalize_snippet(snippet)
-            stored = self.store.store_snippet(normalized_snippet)
-            notes = self._normalization_notes(snippet, normalized_snippet)
+            insight = request["insight"]
+            normalized_insight = self._normalize_insight(insight)
+            stored = self.store.store_insight(normalized_insight)
+            notes = self._normalization_notes(insight, normalized_insight)
             payload = {
-                "type": "snippet_store",
-                "snippet": stored,
+                "type": "insight_store",
+                "insight": stored,
             }
             if notes:
                 payload["normalization_notes"] = notes
@@ -30,15 +26,15 @@ class SnippetRetriever(BaseRetriever):
 
         if action == "lookup":
             filters = request.get("filters", {})
-            matches = self.store.lookup(
+            matches = self.store.lookup_insights(
                 tags=filters.get("tags"),
                 related_instruments=filters.get("related_instruments"),
                 active_at=filters.get("active_at"),
                 limit=request.get("limit", 5),
             )
             summaries = [
-                SnippetSummary(
-                    snippet_id=entry["snippet_id"],
+                InsightSummary(
+                    insight_id=entry["insight_id"],
                     title=entry["title"],
                     body=entry["body"],
                     created_at=entry["created_at"],
@@ -47,11 +43,11 @@ class SnippetRetriever(BaseRetriever):
                 for entry in matches
             ]
             return RetrieverResult(
-                payload={"type": "snippet_lookup", "matches": matches},
-                snippet_summaries=summaries,
+                payload={"type": "insight_lookup", "matches": matches},
+                insight_summaries=summaries,
             )
 
-        raise ValueError(f"unknown snippet action: {action}")
+        raise ValueError(f"unknown insight action: {action}")
 
     @staticmethod
     def _normalization_notes(original: dict, stored: dict) -> list[str]:
@@ -66,9 +62,9 @@ class SnippetRetriever(BaseRetriever):
         return notes
 
     @staticmethod
-    def _normalize_snippet(snippet: dict) -> dict:
-        normalized = dict(snippet)
-        tags = snippet.get("tags")
+    def _normalize_insight(insight: dict) -> dict:
+        normalized = dict(insight)
+        tags = insight.get("tags")
         if tags:
             seen: set[str] = set()
             deduped: list[str] = []

@@ -52,8 +52,8 @@
     "insight_ops": { "$ref": "#/$defs/InsightOps" },
     "insights_writeback": {
       "type": "array",
-      "items": { "$ref": "#/$defs/SnippetWriteback" },
-      "description": "Optional: snippets the agent wants stored."
+      "items": { "$ref": "#/$defs/InsightWriteback" },
+      "description": "Optional: insights the agent wants stored."
     },
     "missing_sources": {
       "type": "array",
@@ -339,7 +339,7 @@
       }
     },
 
-    "SnippetWriteback": {
+    "InsightWriteback": {
       "type": "object",
       "additionalProperties": false,
       "required": ["title", "body", "tags"],

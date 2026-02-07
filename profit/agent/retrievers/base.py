@@ -8,7 +8,7 @@ from typing import Any, Mapping
 class RetrieverResult:
     payload: Mapping[str, Any]
     data_needs: list[Any] = field(default_factory=list)
-    snippet_summaries: list[Any] = field(default_factory=list)
+    insight_summaries: list[Any] = field(default_factory=list)
 
 
 class BaseRetriever:

@@ -54,7 +54,7 @@ The Agent response can have one request envelope per response.
 ```json
 {
     "data_request": [{   // A list of followup requests.
-    "type": "...",  // one of: "market", "real_estate", "snippet"
+    "type": "...",  // one of: "market", "real_estate", "insight"
     "notes": "...",  // any context the Agent wants to keep around for this data
     "request": { }  // Contents of the request
   }],
@@ -95,7 +95,7 @@ Notes:
 - Use JSON `null` (not the string `"null"`) when a bound is open-ended.
 - End dates are inclusive; all times are normalized to UTC while preserving original timezone metadata in downstream payloads where available.
 - Aggregations accept an array of keywords (see Definitions); responses should make clear which aggregation produced each value (e.g., separate columns or keyed objects).
-- When you change anything in this document (fields, schemas, snippet behavior, etc.), also update `planner.md` so the agent prompt stays current.
+- When you change anything in this document (fields, schemas, insight behavior, etc.), also update `planner.md` so the agent prompt stays current.
 
 ## Explicit data needs
 
@@ -117,39 +117,39 @@ Agents can signal missing or desirable datasets alongside their responses. Inclu
 
 Use `name` to describe the dataset, `provider` if a particular source owns it, `reason` to describe why it matters, and `criticality` so humans can prioritize fulfilment. When the dataset exists but is empty for the requested window, capture that via the standard structured error path (see error expectations). This helps us decide whether to add new fetchers or expose a provider-specific backfill.
 
-## Research snippets
+## Research insights
 
-Agents can optionally read from and write to a persistent research-snippet store. Snippets let the Agent reuse prior insights without re-deriving the same context.
+Agents can optionally read from and write to a persistent research-insight store. Insights let the Agent reuse prior context without re-deriving the same findings.
 
-### Snippet schema
+### Insight schema
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `snippet_id` | string | Canonical identifier (UUID4 or prefixed slug). |
+| `insight_id` | string | Canonical identifier (UUID4 or prefixed slug). |
 | `title` | string | Human-readable short summary (max ~120 chars). |
 | `body` | array of string | List of bullet/sentence strings describing the insight. |
 | `tags` | array of string | Themes/sectors/instrument classes (e.g., `["tech", "xnas|aapl"]`). |
 | `related_instruments` | array of canonical IDs | Optional assets the insight references. |
 | `related_regions` | array of canonical region ids | Optional regions. |
-| `source_provider` | string | Where the snippet originated (e.g., `agent` or specific fetcher). |
-| `created_at` | string (UTC timestamp) | Time the snippet was stored. |
-| `expires_at` | string (UTC timestamp) | Optional TTL; snippets past this timestamp should be disregarded unless refreshed. |
+| `source_provider` | string | Where the insight originated (e.g., `agent` or specific fetcher). |
+| `created_at` | string (UTC timestamp) | Time the insight was stored. |
+| `expires_at` | string (UTC timestamp) | Optional TTL; insights past this timestamp should be disregarded unless refreshed. |
 
 The store should normalize tags and instruments (canonical IDs) at write time and record metadata (`source_provider`, `related_*`, `created_at`) for discoverability.
 
-### Snippet requests
+### Insight requests
 
-Agents can interact with the snippet store using request type `snippet`.
+Agents can interact with the insight store using request type `insight`.
 
-#### Create snippet
+#### Create insight
 
 ```json
 {
-  "type": "snippet",
+  "type": "insight",
   "notes": "final insight should be cached",
   "request": {
     "action": "store",
-    "snippet": {
+    "insight": {
       "title": "Energy sector rotation in Jan 2026",
       "body": [
         "Found strong inflows into XNYS|XOM and XNYS|CVX over the past 3 weeks.",
@@ -164,13 +164,13 @@ Agents can interact with the snippet store using request type `snippet`.
 }
 ```
 
-The response from the snippet retriever should include the stored `snippet_id` and any normalization notes (e.g., tag deduplication).
+The response from the insight retriever should include the stored `insight_id` and any normalization notes (e.g., tag deduplication).
 
-#### Lookup snippet
+#### Lookup insight
 
 ```json
 {
-  "type": "snippet",
+  "type": "insight",
   "notes": "see relevant context",
   "request": {
     "action": "lookup",
@@ -184,6 +184,6 @@ The response from the snippet retriever should include the stored `snippet_id` a
 }
 ```
 
-The retriever should return an array of matching snippet summaries (`snippet_id`, `title`, `body`, `created_at`), ordered by recency or relevance, and optionally include metadata about why they matched (tags/instruments).
+The retriever should return an array of matching insight summaries (`insight_id`, `title`, `body`, `created_at`), ordered by recency or relevance, and optionally include metadata about why they matched (tags/instruments).
 
-When the agent loops, include any retrieved snippet summaries (with IDs) in the next prompt so the LLM can cite or reuse them. 
+When the agent loops, include any retrieved insight summaries (with IDs) in the next prompt so the LLM can cite or reuse them. 
