@@ -13,6 +13,7 @@ Goal: support multi-provider economic/market/real-estate data with clear lineage
 4. `market_metrics` – fact table at `(region_id, period_start_date, period_granularity)` with normalized price/inventory/DOM/sale-to-list/pending/price-drop metrics plus `source_provider`, `data_revision`, and `created_at`. Indexes cover region+period, period, and data revision.
 
 5. `ingestion_runs` – audit trail per fetch run with `run_id`, provider metadata, `status`, optional `etag/last_modified`, row count, and `data_revision`.
+
 ## EDGAR/XBRL schema
 
 1. `entity_scheme` – canonical list of entity identifier schemes (`scheme_id`, `scheme`).
