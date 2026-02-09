@@ -95,7 +95,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     runner = AgentV2Runner(
         llm,
-        config=AgentV2RunnerConfig(planner_path=args.planner, compiler_path=args.compiler),
+        config=AgentV2RunnerConfig(
+            planner_path=args.planner,
+            compiler_path=args.compiler,
+            final_prompt_path=Path("profit/agent_v2/prompts/final_response.md"),
+        ),
     )
     answer = runner.run(question=question, extra_instructions=_read_text(args.instructions))
     stub_path = _write_runtime_stub(question.text, answer.text)
@@ -106,4 +110,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
