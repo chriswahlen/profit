@@ -50,14 +50,14 @@ class AgentV2Runner:
             ),
             is_start=True,
         )
-        machine.register_stage("query_prior_insights", QueryPriorInsightsRunner())
+        machine.register_stage("query_prior_insights", QueryPriorInsightsRunner(backend=self.llm_backend))
         machine.register_stage(
             "compile_data",
             CompileDataRunner(backend=self.llm_backend, compiler_path=self.config.compiler_path, question=question),
         )
-        machine.register_stage("data_lookup_market", DataLookupMarketRunner())
-        machine.register_stage("data_lookup_real_estate", DataLookupRealEstateRunner())
-        machine.register_stage("data_lookup_sec", DataLookupSecRunner())
+        machine.register_stage("data_lookup_market", DataLookupMarketRunner(backend=self.llm_backend))
+        machine.register_stage("data_lookup_real_estate", DataLookupRealEstateRunner(backend=self.llm_backend))
+        machine.register_stage("data_lookup_sec", DataLookupSecRunner(backend=self.llm_backend))
         machine.register_stage(
             "final_response",
             FinalResponseRunner(

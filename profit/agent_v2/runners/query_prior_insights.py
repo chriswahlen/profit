@@ -9,6 +9,7 @@ from profit.agent.types import InsightSummary
 from profit.agent_v2.exceptions import AgentV2RuntimeError
 from profit.agent_v2.insights import InsightLookup, InsightsManager
 from profit.agent_v2.runners.common import ContextualAgentRunner, NoopLLMBackend
+from llm.llm_backend import LLMBackend
 
 PROMPT = '''
 You are a financial planning and market research expert.
@@ -64,10 +65,10 @@ Only emit entries for the domains you still need to cover the user's question.
 class QueryPriorInsightsRunner(ContextualAgentRunner):
     """Stage: gather prior insights for the planner."""
 
-    def __init__(self, *, insights_manager: InsightsManager | None = None):
+    def __init__(self, *, backend: LLMBackend | None = None, insights_manager: InsightsManager | None = None):
         self.insights = insights_manager or InsightsManager()
         self._last_matches: list[InsightSummary] | None = None
-        super().__init__(name="query_prior_insights", backend=NoopLLMBackend())
+        super().__init__(name="query_prior_insights", backend=backend or NoopLLMBackend())
 
     def get_prompt(self, *, previous_history_entries):
         meta = previous_history_entries[0].metadata if previous_history_entries else {}
@@ -103,15 +104,9 @@ class QueryPriorInsightsRunner(ContextualAgentRunner):
             updated_context["approach"] = revised_approach
         if data_queries:
             updated_context["data_queries"] = data_queries
+        # TODO: Branch off into data_lookup_market, data_lookup_sec, data_lookup_realestate
+        raise Exception("TODO")
 
-        self.set_meta(
-            user_context=updated_context,
-            step1=meta.get("step1"),
-            prior_insights=[self._serialize_insight(match) for match in matches],
-            data_queries=data_queries,
-        )
-
-        return Run(stage_name="compile_data")
 
     def _collect_insights(self, user_context: dict) -> list[InsightSummary]:
         lookups = self._build_lookups(user_context)

@@ -1,3 +1,5 @@
+THIS IS AN OLD DOC, IGNORE IT
+
 Forget previous context.
 
 You are an expert in the field of economics, investing, and market forecasting. You will provide

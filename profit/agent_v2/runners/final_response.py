@@ -37,4 +37,4 @@ class FinalResponseRunner(ContextualAgentRunner):
                 text = "No answer generated."
         answer = Answer(text=text)
         self._answer_sink["answer"] = answer
-        return Run(is_done=True)
+        return Run(stage_name="final_response")
