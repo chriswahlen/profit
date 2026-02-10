@@ -7,6 +7,30 @@ from profit.agent_v2.insights import InsightLookup, InsightsManager
 from profit.agent_v2.exceptions import AgentV2RuntimeError
 from datetime import datetime, timezone
 
+PROMPT = '''
+You are a financial planning and market research expert.
+
+As an expert, you will develop key insights in order to answer the user's question. These key
+insights will be derived from market data, real estate data, and SEC/EDGAR filings.
+
+USER QUERY:
+{{QUESTION}}
+
+APPROACH:
+{{APPROACH}}
+
+Potentially Relevant Insights:
+{{INSIGHTS_JSON}}
+
+INSTRUCTIONS:
+Produce ONLY a JSON object matching this shape:
+{
+  "approach": "<revised instructions on how you plan to answer>",
+  // A list of insights to retrieve
+  "insights": [ "insight_key_001", "insight_key_002", ... ]
+  // TODO: A list of data needed in JSON format.
+}
+'''
 class QueryPriorInsightsRunner(ContextualAgentRunner):
     """Stage: fetch prior insights requested in step1."""
 
@@ -15,45 +39,16 @@ class QueryPriorInsightsRunner(ContextualAgentRunner):
         super().__init__(name="query_prior_insights", backend=NoopLLMBackend())
 
     def get_prompt(self, *, previous_history_entries):
+        prompt = PROMPT
+        # TODO: replace {{QUESTION}} with the original user question
+        # TODO: replace {{APPROACH}} with the origina approach field.
+        # TODO: Query the insights from the tags given in `user_context`, and list the matches as a JSON Formatted field in {{INSIGHTS_JSON}}
+        # TODO: Give instructions on what kind of market, real estate, and SEC data it can query.
         return ""
 
     def process_prompt(self, *, result: str, previous_history_entries):
-        meta = previous_history_entries[0].metadata if previous_history_entries else {}
-        step1 = meta.get("step1", {})
-
-        # Insight lookups now come solely from the validated initial prompt (user_context).
-        user_ctx = meta.get("user_context", {})
-        insight_search = user_ctx.get("insights", [])
-        if not isinstance(insight_search, list):
-            raise AgentV2RuntimeError("user_context.insights must be a list")
-
-        lookups = []
-        for query in insight_search:
-            if not isinstance(query, dict):
-                continue
-            tags = [t for t in query.get("tags", []) if t]
-            if not tags:
-                continue
-            # If the request specified a start_date, convert it into a freshness window; otherwise default to 365 days.
-            horizon_days = 365
-            start_date = query.get("start_date")
-            if start_date:
-                try:
-                    start_dt = datetime.fromisoformat(start_date)
-                    now = datetime.now(timezone.utc)
-                    delta = now - start_dt.replace(tzinfo=timezone.utc) if start_dt.tzinfo is None else now - start_dt
-                    horizon_days = max(0, int(delta.days))
-                except Exception:
-                    # fall back to default horizon
-                    horizon_days = 365
-            lookups.append(
-                InsightLookup(
-                    tags=tags,
-                    freshness_horizon_days=int(query.get("freshness_horizon_days", horizon_days)),
-                )
-            )
-
-        prior = self.insights.lookup(lookups) if lookups else []
-        # Expose hits to the LLM by passing them forward in metadata.
-        self.set_meta(step1=step1, prior_insights=[i.__dict__ for i in prior])
-        return Run(stage_name="compile_data")
+        # TODO: Look at the result str for the appropriate entries
+        # TODO: Store the revised approach in the user_context
+        # TODO: Store the data queries in the data context
+        # TODO: Spin off subgraphs of the right data fetcher to obtain the data, ending on the compile step.
+        raise Exception("not implemented")
