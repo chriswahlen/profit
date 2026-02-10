@@ -35,6 +35,7 @@ def test_query_prior_insights_emits_join_when_requests(tmp_path: Path):
             [
                 Insight(
                     text="Rates were elevated through mid-2024.",
+                    description="Rates stayed higher than average in the first half.",
                     tags=("rates", "macro"),
                     start_date=date(2024, 1, 1),
                     end_date=date(2024, 6, 30),

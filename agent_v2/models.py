@@ -18,6 +18,7 @@ def _date_from_iso(s: Optional[str]) -> Optional[date]:
 @dataclass(frozen=True)
 class Insight:
     text: str
+    description: str
     tags: tuple[str, ...]
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -25,6 +26,7 @@ class Insight:
     def to_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
+            "description": self.description,
             "tags": list(self.tags),
             "start_date": _date_to_iso(self.start_date),
             "end_date": _date_to_iso(self.end_date),
@@ -33,10 +35,12 @@ class Insight:
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "Insight":
         text = str(data.get("text", "")).strip()
+        description = str(data.get("description", "")).strip()
         tags_raw = data.get("tags") or []
         tags = tuple(str(t).strip() for t in tags_raw if str(t).strip())
         return Insight(
             text=text,
+            description=description,
             tags=tags,
             start_date=_date_from_iso(data.get("start_date")),
             end_date=_date_from_iso(data.get("end_date")),
@@ -59,4 +63,3 @@ class DataRequest:
             request=str(data.get("request", "")).strip(),
             why=str(data.get("why", "")).strip(),
         )
-

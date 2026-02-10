@@ -36,6 +36,7 @@ class InsightsStore:
             CREATE TABLE IF NOT EXISTS agent_v2_insights (
               insight_id INTEGER PRIMARY KEY AUTOINCREMENT,
               text TEXT NOT NULL,
+              description TEXT NOT NULL,
               tags_json TEXT NOT NULL,
               start_date TEXT,
               end_date TEXT,
@@ -64,6 +65,7 @@ class InsightsStore:
             rows.append(
                 (
                     ins.text,
+                    ins.description,
                     json.dumps(list(ins.tags), sort_keys=True, separators=(",", ":"), ensure_ascii=False),
                     ins.start_date.isoformat() if ins.start_date else None,
                     ins.end_date.isoformat() if ins.end_date else None,
@@ -74,8 +76,8 @@ class InsightsStore:
         with self._conn:
             self._conn.executemany(
                 """
-                INSERT INTO agent_v2_insights (text, tags_json, start_date, end_date)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO agent_v2_insights (text, description, tags_json, start_date, end_date)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -98,7 +100,7 @@ class InsightsStore:
         # Simple scan + filter: small table expected.
         rows = self._conn.execute(
             """
-            SELECT insight_id, text, tags_json, start_date, end_date
+            SELECT insight_id, text, description, tags_json, start_date, end_date
             FROM agent_v2_insights
             ORDER BY insight_id DESC
             LIMIT ?
@@ -107,7 +109,7 @@ class InsightsStore:
         ).fetchall()
 
         out: list[InsightRow] = []
-        for insight_id, text, tags_json, s, e in rows:
+        for insight_id, text, description, tags_json, s, e in rows:
             try:
                 row_tags = [str(x).strip().lower() for x in json.loads(tags_json or "[]")]
             except Exception:
@@ -125,6 +127,7 @@ class InsightsStore:
 
             insight = Insight(
                 text=str(text),
+                description=str(description or ""),
                 tags=tuple(sorted({t for t in row_tags if t})),
                 start_date=row_start,
                 end_date=row_end,
@@ -133,4 +136,3 @@ class InsightsStore:
             if len(out) >= limit:
                 break
         return out
-

@@ -18,7 +18,7 @@ def test_compile_data_final_stores_insights_and_emits_final_response(tmp_path: P
         backend = StubLLM(
             {
                 "STAGE: compile_data": (
-                    '{"action":"final","final_answer":"Answer.","insights_to_store":[{"text":"Insight.","tags":["t1"],'
+                    '{"action":"final","final_answer":"Answer.","insights_to_store":[{"text":"Insight.","description":"Conclusion text.","tags":["t1"],'
                     '"start_date":"2024-01-01","end_date":"2024-12-31"}],"drop_dataset_keys":[],'
                     '"refined_tags":[],"refined_start_date":null,"refined_end_date":null}'
                 )

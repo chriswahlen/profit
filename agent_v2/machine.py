@@ -64,9 +64,9 @@ def build_agent(
 
     initial = InitialPromptStage(question=question, backend=backend)
     query = QueryPriorInsightsStage(backend=backend, insights_store=insights_store)
-    market = DataLookupMarketStage()
-    real_estate = DataLookupRealEstateStage()
-    sec = DataLookupSECStage()
+    market = DataLookupMarketStage(backend=backend)
+    real_estate = DataLookupRealEstateStage(backend=backend)
+    sec = DataLookupSECStage(backend=backend)
     compile_stage = CompileDataStage(backend=backend, insights_store=insights_store)
     final = FinalResponseStage()
 
@@ -109,4 +109,3 @@ def load_question_from_snapshot(*, db_path: Path, execution_id: str = EXECUTION_
         return str(q) if isinstance(q, str) and q.strip() else None
     finally:
         store.close()
-

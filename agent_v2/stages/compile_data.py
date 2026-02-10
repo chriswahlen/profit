@@ -35,12 +35,22 @@ Output STRICT JSON (no markdown) with:
 {
   "action": "final" | "more_data",
   "final_answer": string | null,
-  "insights_to_store": [{"text": "...", "tags": ["..."], "start_date": "YYYY-MM-DD"|null, "end_date": "YYYY-MM-DD"|null}, ...],
+  "insights_to_store": [
+    {
+      "text": "...",                     # full insight text drawn from the available data
+      "description": "...",              # short conclusion that helps answer the user question
+      "tags": ["..."],
+      "start_date": "YYYY-MM-DD"|null,
+      "end_date": "YYYY-MM-DD"|null
+    }, ...
+  ],
   "drop_dataset_keys": ["req_key_to_drop", ...],
   "refined_tags": ["tag1", ...],
   "refined_start_date": "YYYY-MM-DD" | null,
   "refined_end_date": "YYYY-MM-DD" | null
 }
+
+Each stored insight should be a conclusion drawn from the data collected so far that feels useful for answering the user question; the `description` field should summarize that conclusion.
 """
 
 
@@ -88,6 +98,8 @@ class CompileDataStage(AgentTransformRunner):
         previous_history_entries: list[HistoryEntry],
         user_context: dict[str, Any],
     ) -> Run:
+        question = str(user_context.get("question", "")).strip()
+
         payload = parse_json_object(result, stage=self.name)
         action = str(payload.get("action", "")).strip().lower()
 
@@ -110,8 +122,10 @@ class CompileDataStage(AgentTransformRunner):
             user_context["tags"] = refined_tags
             user_context["start_date"] = refined_start.isoformat() if refined_start else None
             user_context["end_date"] = refined_end.isoformat() if refined_end else None
+            user_context["question"] = question
             return Run(stage_name=STAGE_QUERY_PRIOR_INSIGHTS)
 
         final_answer = str(payload.get("final_answer") or "").strip()
         user_context["final_answer"] = final_answer
+        user_context["question"] = question
         return Run(stage_name=STAGE_FINAL_RESPONSE)
