@@ -63,6 +63,8 @@ class AgentV2RunnerConfig:
     planner_path: Path
     compiler_path: Path
     final_prompt_path: Path
+    execution_id: str = "agent_v2"
+    snapshot_path: Path | None = None
     max_steps: int = 64
     run_id: str | None = None
 
