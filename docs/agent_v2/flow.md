@@ -1,4 +1,4 @@
-# Step 1: Prompt Phase
+# Prompt Phase [initial_prompt]
 
 We take the user prompt and instruct the Agent that it is an expert in finance and economics.
 We instruct the Agent that it can query our known data sources (Market, SEC/Edgar, Real Estate).
@@ -6,7 +6,7 @@ It's job is to generate "insights" it can use, along with the data, to answer th
 The first step is to look up any prior insights that might be useful. Insights are tagged, and
 also have start/end dates associated with them.
 
-# Step 2: Query Prior Insights
+# Query Prior Insights [query_prior_insights]
 
 We'll look up any insights that match the tags and return them, along with the original user prompt.
 If there were no matching insights, we'll let the Agent know. At this point, we'll ask the Agent for
@@ -15,31 +15,31 @@ requests at this point are still somewhat vague (e.g. "Google Stock Price closin
 2024"). Each request is associated with a unique key, which contains the request for data it wants,
 and some context as to why it wants the data.
 
-# Step 3. Data Look Up
+# Data Look Up
 
 The response will fan out at this point based on the data request type. The output of this step
 is all of the data requests with their key and the original context associated with them. If no data
 was able to be found, the result should say so. All of the results are returned in as compact a
 data format as possible.
 
-## Step 3a. Market Data Requests.
+## Market Data Requests [data_lookup_market]
 
 The agent is requesting data from stock markets, crypto markets, commodity prices, etc. We store
 these in our columnar database, so we'll have some canned ways to query this data (daily values,
 7-day average, monthly average, etc.).
 
-## Step 3b. Real Estate Data
+## Real Estate Data [data_lookup_real_estate]
 
 We'll expose the fields we have in our database and allow the AI to construct a query for the data
 it will need. The Agent will be able to make repeated queries as necessary.
 
-## Step 3c. SEC / Edgar data
+## SEC / Edgar data  [data_lookup_sec]
 
 We'll expose the fields we have in our database and allow the AI to construct a query for the data
 it will need. The Agent will be able to make repeated queries as necessary (e.g. to query the
 available fields - for example, querying the keys a company used to store its capex values, etc).
 
-# Step 4
+# Step 4 [ [compile_data]]
 
 We report the data back to the Agent all at once. The agent can respond in one of two ways:
 
