@@ -1,4 +1,0 @@
-# zcat a pickle file
-file=$1
-off=$(grep -abo $'\x1f\x8b\x08' "$file" | head -1 | cut -d: -f1)
-tail -c +"$((off+1))" "$file" | zcat 
