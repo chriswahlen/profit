@@ -6,29 +6,6 @@ from typing import Any, Iterable, Optional
 
 
 @dataclass
-class Anchor:
-    id: str
-    type: str
-    priority: str
-    purpose: str
-    time_range: dict
-    entity: dict | None = None
-    extras: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class Step1Result:
-    raw: dict
-    needs_data: bool
-    can_answer_now: bool
-    stop_reason: str
-    data_needed_fluid: list[str]
-    anchors: list[Anchor]
-    final_answer: Optional[str] = None
-    clarifying_questions: Optional[list[str]] = None
-
-
-@dataclass
 class Request:
     request_id: str
     type: str
@@ -43,19 +20,6 @@ class RetrievalBatch:
     requests: list[Request]
     depends_on_batches: list[str] = field(default_factory=list)
 
-
-@dataclass
-class Step2Result:
-    raw: dict
-    batches: list[RetrievalBatch]
-    entity_resolution_report: list[dict]
-
-
-@dataclass
-class Answer:
-    text: str
-    step1: Optional[Step1Result] = None
-    step2: Optional[Step2Result] = None
 
 
 @dataclass

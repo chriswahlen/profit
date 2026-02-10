@@ -47,14 +47,14 @@ class InitialPromptRunner(ContextualAgentRunner):
         prompt = template.replace("{{question}}", self.question)
         prompt = prompt.replace("{{hints}}", hint_block)
         prompt = prompt + extra
-        print("PROMPT: %s" % prompt)
+        print("[InitialPrompt] PROMPT\n%s\n" % prompt)
         return prompt.strip()
 
     def process_prompt(self, *, result: str, previous_history_entries):
-        print("RESULT:\n--------------------%s\n" % result)
+        print("[InitialPrompt] RESPONSE\n%s\n" % result)
         payload = self._validate_result(result)
         # Persist the validated output in the run metadata so downstream stages can reuse it.
-        self.set_meta(user_context=payload)
+        self.set_meta(user_context=payload, question=self.question)
         return Run(stage_name="query_prior_insights")
 
     def _validate_result(self, raw: str) -> dict:

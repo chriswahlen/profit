@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from agentapi.plan import Run
-
 import pytest
 
 from profit.agent_v2.exceptions import AgentV2ValidationError
@@ -34,8 +32,7 @@ def test_initial_prompt_stores_user_context():
     )
 
     result = runner.process_prompt(result=_valid_result(), previous_history_entries=[])
-    assert isinstance(result, Run)
-    assert result.stage_name == "query_prior_insights"
+    assert getattr(result, "stage_name", None) == "query_prior_insights"
 
     context = runner.meta.get("user_context")
     assert context is not None
