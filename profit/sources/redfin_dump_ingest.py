@@ -177,9 +177,12 @@ class RedfinIngestionStats:
 
 
 def rows_from_dump(path: Path, *, delimiter: str = "\t", limit: int | None = None) -> Iterator[dict[str, str]]:
-    open_fn = gzip.open if path.suffix.lower() == ".gz" else path.open
-    mode = "rt" if open_fn is gzip.open else "r"
-    with open_fn(path, mode=mode, encoding="utf-8", newline="") as fh:
+    is_gzip = path.suffix.lower() == ".gz"
+    if is_gzip:
+        fh_ctx = gzip.open(path, mode="rt", encoding="utf-8", newline="")
+    else:
+        fh_ctx = path.open(mode="r", encoding="utf-8", newline="")
+    with fh_ctx as fh:
         reader = csv.DictReader(fh, delimiter=delimiter)
         count = 0
         try:

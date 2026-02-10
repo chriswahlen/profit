@@ -35,7 +35,6 @@ class RedfinStore:
             self._owns_conn = opened_conn
         else:
             self._owns_conn = owns_conn
-        self.conn.row_factory = sqlite3.Row
         if not readonly:
             self.ensure_schema()
         logger.info("redfin store opening %s (readonly=%s)", self.db_path, readonly)
@@ -170,4 +169,5 @@ class RedfinStore:
         params = (*region_ids, start.isoformat(), end.isoformat())
         logger.info("redfin query: %s params=%s", query.strip(), params)
         cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        columns = [col[0] for col in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]

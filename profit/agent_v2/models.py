@@ -5,6 +5,15 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 
+@dataclass(frozen=True)
+class Answer:
+    """Terminal agent answer returned to the caller."""
+
+    text: str
+    citations: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+
+
 @dataclass
 class Request:
     request_id: str
@@ -19,7 +28,6 @@ class RetrievalBatch:
     purpose: str
     requests: list[Request]
     depends_on_batches: list[str] = field(default_factory=list)
-
 
 
 @dataclass
