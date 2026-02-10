@@ -40,7 +40,7 @@ def test_query_prior_insights_returns_matches(tmp_path):
     assert '"growth"' in prompt
 
     result = runner.process_prompt(result="", previous_history_entries=history)
-    assert getattr(result, "stage_name", None) == "compile_data"
+    assert getattr(result, "stage_name", None) == "final_response"
     assert runner.meta["prior_insights"][0]["title"] == "Market signal"
     assert runner.meta["user_context"]["approach"] == "Assess GOOG growth"
     assert runner.meta["data_queries"] == []
@@ -134,6 +134,6 @@ def test_query_prior_insights_data_query_types(tmp_path, data_query):
         previous_history_entries=history,
     )
 
-    assert getattr(stage, "stage_name", None) == "compile_data"
+    assert getattr(stage, "stage_name", None) == "final_response"
     assert runner.meta["data_queries"]
     assert runner.meta["data_queries"][0]["type"] == data_query["type"]
