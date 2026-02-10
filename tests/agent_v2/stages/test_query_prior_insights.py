@@ -58,16 +58,20 @@ def test_query_prior_insights_emits_join_when_requests(tmp_path: Path):
                 "end_date": "2024-12-31",
             }
         )
-        fragment = stage.run(previous_history_entries=[parent])
+        user_context = {
+            "question": "How did markets react to rate policy in 2024?",
+            "tags": ["rates"],
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+        }
+        fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
         assert isinstance(fragment, Join)
         assert isinstance(fragment.then, Run)
         assert fragment.then.stage_name == "compile_data"
 
-        md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-        assert md["question"].startswith("How did markets react")
-        assert "prior_insights" in md
-        assert md["market_requests"][0]["key"] == "m1"
-        assert "equities" in md["tags"]
+        assert user_context["question"].startswith("How did markets react")
+        assert user_context["prior_insights"]
+        assert user_context["market_requests"][0]["key"] == "m1"
+        assert "equities" in user_context["tags"]
     finally:
         store.close()
-

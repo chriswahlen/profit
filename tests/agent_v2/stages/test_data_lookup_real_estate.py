@@ -17,16 +17,14 @@ def test_data_lookup_real_estate_placeholder():
         status="succeeded",
         timestamp=0.0,
         result="ok",
-        metadata={
-            "question": "Q",
-            "market_requests": [],
-            "real_estate_requests": [{"key": "re1", "request": "SF median sale price 2024", "why": "housing"}],
-            "sec_requests": [],
-        },
+        metadata={},
     )
-    fragment = stage.run(previous_history_entries=[parent])
+    user_context = {
+        "real_estate_requests": [
+            {"key": "re1", "request": "SF median sale price 2024", "why": "housing"}
+        ]
+    }
+    fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
     assert isinstance(fragment, Fork)
-    md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-    assert "real_estate_datasets" in md
-    assert md["real_estate_datasets"]["re1"]["kind"] == "real_estate_placeholder"
-
+    assert "real_estate_datasets" in user_context
+    assert user_context["real_estate_datasets"]["re1"]["kind"] == "real_estate_placeholder"

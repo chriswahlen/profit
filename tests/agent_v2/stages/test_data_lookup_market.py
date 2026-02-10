@@ -17,17 +17,13 @@ def test_data_lookup_market_returns_datasets():
         status="succeeded",
         timestamp=0.0,
         result="ok",
-        metadata={
-            "question": "Q",
-            "market_requests": [{"key": "m1", "request": "S&P 500 close 2024", "why": "baseline"}],
-            "real_estate_requests": [],
-            "sec_requests": [],
-        },
+        metadata={},
     )
-    fragment = stage.run(previous_history_entries=[parent])
+    user_context = {
+        "market_requests": [{"key": "m1", "request": "S&P 500 close 2024", "why": "baseline"}]
+    }
+    fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
     assert isinstance(fragment, Fork)
-    md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-    assert "market_datasets" in md
-    assert "m1" in md["market_datasets"]
-    assert md["market_datasets"]["m1"]["kind"] == "synthetic_daily_series"
-
+    assert "market_datasets" in user_context
+    assert "m1" in user_context["market_datasets"]
+    assert user_context["market_datasets"]["m1"]["kind"] == "synthetic_daily_series"

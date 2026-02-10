@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
+
+from agentapi.history_entry import HistoryEntry
 
 from agentapi.plan import Run
 from agentapi.runners import AgentTransformRunner
@@ -45,35 +47,30 @@ class InitialPromptStage(AgentTransformRunner):
     def __init__(self, *, question: str, backend) -> None:
         super().__init__(name="initial_prompt", backend=backend)
         self._question = question.strip()
-        self._parsed: Mapping[str, Any] | None = None
 
-    def get_prompt(self, *, previous_history_entries) -> str:
+    def get_prompt(
+        self,
+        *,
+        previous_history_entries: list[HistoryEntry],
+        user_context: dict[str, Any],
+    ) -> str:
         return f"{PROMPT}\nUSER_QUESTION:\n{self._question}\n"
 
-    def process_prompt(self, *, result: str, previous_history_entries) -> Run:
+    def process_prompt(
+        self,
+        *,
+        result: str,
+        previous_history_entries: list[HistoryEntry],
+        user_context: dict[str, Any],
+    ) -> Run:
         payload = parse_json_object(result, stage=self.name)
-        self._parsed = payload
-        return Run(stage_name=STAGE_QUERY_PRIOR_INSIGHTS)
-
-    def history_metadata(self, *, fragment, previous_history_entries):
-        tags_raw = []
-        start_date = None
-        end_date = None
-        if self._parsed:
-            tags_raw = self._parsed.get("tags") or []
-            start_date = _parse_date(self._parsed.get("start_date"))
-            end_date = _parse_date(self._parsed.get("end_date"))
+        tags_raw = payload.get("tags") or []
         tags = [str(t).strip() for t in tags_raw if isinstance(t, str) and t.strip()]
-        return {
-            "question": self._question,
-            "tags": tags,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat() if end_date else None,
-            "user_context": {
-                "question": self._question,
-                "tags": tags,
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
-            },
-        }
-
+        start_date = _parse_date(payload.get("start_date"))
+        end_date = _parse_date(payload.get("end_date"))
+        user_context["question"] = self._question
+        user_context["tags"] = tags
+        user_context["start_date"] = start_date.isoformat() if start_date else None
+        user_context["end_date"] = end_date.isoformat() if end_date else None
+        user_context.setdefault("prior_insights", [])
+        return Run(stage_name=STAGE_QUERY_PRIOR_INSIGHTS)

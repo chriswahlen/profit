@@ -1,24 +1,21 @@
 from __future__ import annotations
 
+from typing import Any
+
+from agentapi.history_entry import HistoryEntry
 from agentapi.plan import Fork
-
-
-PROMPT = """\
-STAGE: final_response
-
-This is the terminal stage. It finalizes the agent run and persists the final answer.
-No further work may be emitted from this stage.
-"""
 
 
 class FinalResponseStage:
     name = "final_response"
+    """Terminal stage that persists the final answer."""
 
-    def run(self, *, previous_history_entries):
-        parent = previous_history_entries[-1].metadata if previous_history_entries else {}
-        self._final_answer = str(parent.get("final_answer", "")).strip()
+    def run(
+        self,
+        *,
+        previous_history_entries: list[HistoryEntry],
+        user_context: dict[str, Any],
+    ):
+        final_answer = str(user_context.get("final_answer", "")).strip()
+        user_context["final_answer"] = final_answer
         return Fork(children=[])
-
-    def history_metadata(self, *, fragment, previous_history_entries):
-        return {"final_answer": getattr(self, "_final_answer", ""), "user_context": {"final_answer": getattr(self, "_final_answer", "")}}
-

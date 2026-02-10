@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
+from agentapi.history_entry import HistoryEntry
 from agentapi.plan import Run
 from agentapi.runners import AgentTransformRunner
 
@@ -55,38 +56,24 @@ class CompileDataStage(AgentTransformRunner):
     def __init__(self, *, backend, insights_store: InsightsStore) -> None:
         super().__init__(name="compile_data", backend=backend)
         self._insights_store = insights_store
-        self._parsed: Mapping[str, Any] | None = None
-        self._final_answer: str | None = None
-        self._refined: dict[str, Any] = {}
-        self._question: str = ""
 
-    def get_prompt(self, *, previous_history_entries) -> str:
-        merged: dict[str, Any] = {}
-        for entry in previous_history_entries:
-            for k in (
-                "question",
-                "tags",
-                "start_date",
-                "end_date",
-                "prior_insights",
-                "market_requests",
-                "real_estate_requests",
-                "sec_requests",
-                "market_datasets",
-                "real_estate_datasets",
-                "sec_datasets",
-            ):
-                if k in entry.metadata and k not in merged:
-                    merged[k] = entry.metadata.get(k)
-
-        question = str(merged.get("question", "")).strip()
-        self._question = question
-        prior_insights = merged.get("prior_insights") or []
+    def _load_prompt_context(self, user_context: dict[str, Any]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        question = str(user_context.get("question", "")).strip()
+        prior_insights = user_context.get("prior_insights") or []
         datasets = {
-            "market": merged.get("market_datasets") or {},
-            "real_estate": merged.get("real_estate_datasets") or {},
-            "sec": merged.get("sec_datasets") or {},
+            "market": user_context.get("market_datasets") or {},
+            "real_estate": user_context.get("real_estate_datasets") or {},
+            "sec": user_context.get("sec_datasets") or {},
         }
+        return question, prior_insights, datasets
+
+    def get_prompt(
+        self,
+        *,
+        previous_history_entries: list[HistoryEntry],
+        user_context: dict[str, Any],
+    ) -> str:
+        question, prior_insights, datasets = self._load_prompt_context(user_context)
         return (
             f"{PROMPT}\n"
             f"USER_QUESTION:\n{question}\n\n"
@@ -94,9 +81,14 @@ class CompileDataStage(AgentTransformRunner):
             f"DATASETS_JSON:\n{json.dumps(datasets, ensure_ascii=False, sort_keys=True)}\n"
         )
 
-    def process_prompt(self, *, result: str, previous_history_entries) -> Run:
+    def process_prompt(
+        self,
+        *,
+        result: str,
+        previous_history_entries: list[HistoryEntry],
+        user_context: dict[str, Any],
+    ) -> Run:
         payload = parse_json_object(result, stage=self.name)
-        self._parsed = payload
         action = str(payload.get("action", "")).strip().lower()
 
         insights_raw = payload.get("insights_to_store") or []
@@ -115,28 +107,11 @@ class CompileDataStage(AgentTransformRunner):
             refined_tags = [str(t).strip() for t in refined_tags_raw if isinstance(t, str) and t.strip()]
             refined_start = _parse_date(payload.get("refined_start_date"))
             refined_end = _parse_date(payload.get("refined_end_date"))
-            self._refined = {
-                "tags": refined_tags,
-                "start_date": refined_start.isoformat() if refined_start else None,
-                "end_date": refined_end.isoformat() if refined_end else None,
-            }
+            user_context["tags"] = refined_tags
+            user_context["start_date"] = refined_start.isoformat() if refined_start else None
+            user_context["end_date"] = refined_end.isoformat() if refined_end else None
             return Run(stage_name=STAGE_QUERY_PRIOR_INSIGHTS)
 
-        self._final_answer = str(payload.get("final_answer") or "").strip()
+        final_answer = str(payload.get("final_answer") or "").strip()
+        user_context["final_answer"] = final_answer
         return Run(stage_name=STAGE_FINAL_RESPONSE)
-
-    def history_metadata(self, *, fragment, previous_history_entries):
-        md: dict[str, Any] = {}
-        if self._question:
-            md["question"] = self._question
-        if self._final_answer is not None:
-            md["final_answer"] = self._final_answer
-        if self._refined:
-            md.update(self._refined)
-            md["user_context"] = {
-                "question": self._question,
-                "tags": self._refined.get("tags") or [],
-                "start_date": self._refined.get("start_date"),
-                "end_date": self._refined.get("end_date"),
-            }
-        return md

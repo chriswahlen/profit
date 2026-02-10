@@ -40,12 +40,16 @@ def test_compile_data_final_stores_insights_and_emits_final_response(tmp_path: P
                 "market_datasets": {"m1": {"kind": "synthetic_daily_series", "points": []}},
             },
         )
-        fragment = stage.run(previous_history_entries=[parent])
+        user_context = {
+            "question": "Q",
+            "prior_insights": [],
+            "market_datasets": {"m1": {"kind": "synthetic_daily_series", "points": []}},
+        }
+        fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
         assert isinstance(fragment, Run)
         assert fragment.stage_name == "final_response"
 
-        md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-        assert md["final_answer"] == "Answer."
+        assert user_context["final_answer"] == "Answer."
 
         hits = insights_store.search(tags=["t1"], start_date=None, end_date=None, limit=10)
         assert len(hits) == 1
@@ -79,15 +83,21 @@ def test_compile_data_more_data_emits_query_prior_insights(tmp_path: Path):
             result="ok",
             metadata={"question": "Q", "prior_insights": [], "market_datasets": {}},
         )
-        fragment = stage.run(previous_history_entries=[parent])
+        user_context = {
+            "question": "Q",
+            "prior_insights": [],
+            "market_datasets": {},
+            "tags": ["initial"],
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+        }
+        fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
         assert isinstance(fragment, Run)
         assert fragment.stage_name == "query_prior_insights"
 
-        md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-        assert md["tags"] == ["macro"]
-        assert md["start_date"] == "2024-01-01"
-        assert md["end_date"] == "2024-12-31"
-        assert md["question"] == "Q"
+        assert user_context["tags"] == ["macro"]
+        assert user_context["start_date"] == "2024-01-01"
+        assert user_context["end_date"] == "2024-12-31"
+        assert user_context["question"] == "Q"
     finally:
         insights_store.close()
-

@@ -17,16 +17,12 @@ def test_data_lookup_sec_placeholder():
         status="succeeded",
         timestamp=0.0,
         result="ok",
-        metadata={
-            "question": "Q",
-            "market_requests": [],
-            "real_estate_requests": [],
-            "sec_requests": [{"key": "s1", "request": "AAPL capex 2023-2024", "why": "investment"}],
-        },
+        metadata={},
     )
-    fragment = stage.run(previous_history_entries=[parent])
+    user_context = {
+        "sec_requests": [{"key": "s1", "request": "AAPL capex 2023-2024", "why": "investment"}]
+    }
+    fragment = stage.run(previous_history_entries=[parent], user_context=user_context)
     assert isinstance(fragment, Fork)
-    md = stage.history_metadata(fragment=fragment, previous_history_entries=[parent])
-    assert "sec_datasets" in md
-    assert md["sec_datasets"]["s1"]["kind"] == "sec_placeholder"
-
+    assert "sec_datasets" in user_context
+    assert user_context["sec_datasets"]["s1"]["kind"] == "sec_placeholder"
