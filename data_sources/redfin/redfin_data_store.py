@@ -1,0 +1,4 @@
+
+
+class RedfinDataStore(SqliteDataStore):
+  # TODO

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 # A DataSource implementation for Sqlite sources.
-class SqliteDataSource(DataSource):
-    def __init__(self, name: str, summary: str, config: Config):
+class SqliteDataStore(DataStore):
+    def __init__(self, config: Config):
       raise NotImplementedError("TODO")
 
     # This is a brief description, enough to give an Agent enough information to come up with the
