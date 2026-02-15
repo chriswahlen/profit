@@ -41,8 +41,6 @@ class MarketDataSourceTests(unittest.TestCase):
         candle_time = "2026-02-10 00:00:00"
         c_alpha = Candle(
             canonical_id="XNYS:AAPL",
-            instrument_type="security",
-            interval="1d",
             start_ts=candle_time,
             open=10,
             high=11,
@@ -53,8 +51,6 @@ class MarketDataSourceTests(unittest.TestCase):
         )
         c_beta = Candle(
             canonical_id="XNYS:AAPL",
-            instrument_type="security",
-            interval="1d",
             start_ts=candle_time,
             open=9,
             high=12,
@@ -87,16 +83,12 @@ class MarketDataSourceTests(unittest.TestCase):
         candle_time = "2026-02-12 00:00:00"
         alpha = Candle(
             canonical_id="fx:usd:eur",
-            instrument_type="forex",
-            interval="1d",
             start_ts=candle_time,
             close=1.08,
             provider="alpha",
         )
         beta = Candle(
             canonical_id="fx:usd:eur",
-            instrument_type="forex",
-            interval="1d",
             start_ts=candle_time,
             close=1.07,
             provider="beta",
