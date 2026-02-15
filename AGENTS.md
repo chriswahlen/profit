@@ -4,12 +4,16 @@
 - Always add unit tests
 - Prefer to keep functions and methods small (< 100) lines. Abstract out helper methods to accomplish this goal.
 - Be generous with comments especially with nested or complex code.
+- DataSourceManager owns data store instances: construct shared stores in the manager and inject them into data sources/providers instead of letting each source open its own connection.
 - Keep tests in directory structures that mirror source modules (e.g., `data_sources/market/...` -> `tests/data_source/market/...`).
+
+- For now, DO NOT worry about backwards compatibility. Assume we will start over with new data and that there are no legacy clients.
 
 # Python
 - Log significant events as INFO (opening a database, opening a file to import it, etc)
 - Log minor events as DEBUG (inserting to the datbase, etc)
 - Avoid importing modules inline; strongly prefer all imports at the beginning of .py files.
+- Ingestions must record start/finish runs, batch inserts to avoid unbounded memory, log periodic progress, and mark partial/failure status with row counts.
 
 # SQLite
 - Always use WAL mode for databases.
