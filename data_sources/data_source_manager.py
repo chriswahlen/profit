@@ -5,6 +5,7 @@ from typing import Dict
 
 from config import Config
 from data_sources.data_source import DataSource
+from data_sources.entity import EntityStore
 from data_sources.redfin.redfin_data_source import RedfinDataSource
 
 
@@ -12,8 +13,9 @@ class DataSourceManager:
     def __init__(self, config: Config | None = None):
         self.config = config or Config()
         self._sources: Dict[str, DataSource] = {}
+        self.entity_store = EntityStore(self.config)
         # Register built-ins.
-        self.add(RedfinDataSource(self.config))
+        self.add(RedfinDataSource(self.config, entity_store=self.entity_store))
 
     # Adds a known data source to this manager.
     def add(self, source: DataSource):
