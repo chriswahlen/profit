@@ -5,14 +5,16 @@ from typing import Iterable
 
 from config import Config
 from data_sources.data_store import DataSourceUpdateResults
+from data_sources.entity import EntityStore
 
 
 # Abstract base class describing a data source.
 class DataSource(ABC):
-    def __init__(self, name: str, summary: str, config: Config):
+    def __init__(self, name: str, summary: str, config: Config, entity_store: EntityStore):
         self.name = name
         self.summary = summary
         self.config = config
+        self.entity_store = entity_store
 
     # This is a brief description, enough to give an Agent enough information to come up with the
     # type of query it could perform (but not necessarily the specifics).
