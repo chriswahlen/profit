@@ -13,7 +13,7 @@ class EntityHelpersTests(unittest.TestCase):
 
     def test_company_canonical(self):
         cid = Company.from_name("Neo Aeronautics", country_iso2="US").canonical_id
-        self.assertEqual(cid, "us:com:neo-aeronautics")
+        self.assertEqual(cid, "company:us:neo-aeronautics")
 
     def test_company_requires_fields(self):
         with self.assertRaises(ValueError):

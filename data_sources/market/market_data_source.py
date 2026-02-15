@@ -43,7 +43,7 @@ class MarketDataSource(DataSource):
     def ensure_up_to_date(self, entity_ids: Iterable[str], providers: List[str] | None = None) -> DataSourceUpdateResults:
         active_providers = [p for p in self.providers if providers is None or p.name in providers]
         if not active_providers:
-            return DataSourceUpdateResults(detail="no matching providers")
+            raise RuntimeError("No matching providers for requested list" if providers else "No providers configured")
 
         total_updated = total_failed = 0
         batch_size = 5000

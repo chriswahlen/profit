@@ -6,6 +6,7 @@
 - Be generous with comments especially with nested or complex code.
 - DataSourceManager owns data store instances: construct shared stores in the manager and inject them into data sources/providers instead of letting each source open its own connection.
 - Keep tests in directory structures that mirror source modules (e.g., `data_sources/market/...` -> `tests/data_source/market/...`).
+- Canonical entity IDs must use the typed, colon-delimited pattern `[entity_type]:...` (e.g., `company:us:microsoft-corporation`, `sec:xnas:aapl`, `fx:usd:eur`, `index:spglobal:sp500`). Never use provider-prefixed IDs as canonical.
 
 - For now, DO NOT worry about backwards compatibility. Assume we will start over with new data and that there are no legacy clients.
 

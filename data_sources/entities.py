@@ -47,7 +47,7 @@ class Company:
         if not self.name or not self.name.strip():
             raise ValueError("Company name is required")
         slug = _slugify(self.name)
-        return f"{self.country_iso2.strip().lower()}:com:{slug}"
+        return f"company:{self.country_iso2.strip().lower()}:{slug}"
 
     @classmethod
     def from_name(cls, name: str, country_iso2: str = "us") -> "Company":
