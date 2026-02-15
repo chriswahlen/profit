@@ -54,6 +54,24 @@ class Region:
             raise ValueError(f"Unsupported region type: {self.region_type}")
         return builders[key](self)
 
+    def parent(self) -> Optional["Region"]:
+        """Return the immediate parent region if derivable; otherwise None."""
+        key = self.region_type.lower()
+        if key in {"neighborhood", "metro", "county"}:
+            if not self.state_code:
+                return None
+            # Provinces and states share the same builder; preserve original type if province.
+            parent_type = "province" if key == "province" else "state"
+            return Region.from_fields(
+                region_type=parent_type,
+                region_name=self.state_code,
+                country_iso2=self.country_iso2,
+                state_code=self.state_code,
+            )
+        if key in {"state", "province"}:
+            return Region.national(country_iso2=self.country_iso2)
+        return None
+
     # Factory helpers
     @classmethod
     def national(cls, *, country_iso2: str = "us") -> "Region":
@@ -108,6 +126,8 @@ class Region:
         city: Optional[str] = None,
     ) -> "Region":
         key = region_type.lower()
+        if key.startswith("region:"):
+            key = key.split(":", 1)[1]
         if key == "national":
             return cls.national(country_iso2=country_iso2)
         if key == "metro":

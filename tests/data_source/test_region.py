@@ -52,9 +52,24 @@ class RegionIdTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Region.from_fields(region_type="province", region_name="Ontario")
 
+    def test_strips_region_prefix(self):
+        rid = Region.from_fields(region_type="region:county", region_name="Maury County, TN", state_code="TN").canonical_id
+        self.assertEqual(rid, "region:county:us:tn:maury_county")
+
     def test_state_and_province(self):
         self.assertEqual(Region.state(code="WA").canonical_id, "region:state:us:wa")
         self.assertEqual(Region.province(code="Alberta", country_iso2="ca").canonical_id, "region:province:ca:alberta")
+
+    def test_parent_for_county_and_neighborhood(self):
+        county = Region.county(name="Maury County, TN", state_code="TN")
+        self.assertEqual(county.parent().canonical_id, "region:state:us:tn")
+
+        nbh = Region.neighborhood(name="Ballard", city="Seattle", state_code="WA")
+        self.assertEqual(nbh.parent().canonical_id, "region:state:us:wa")
+
+    def test_parent_for_state(self):
+        state = Region.state(code="WA")
+        self.assertEqual(state.parent().canonical_id, "region:national:us")
 
 
 if __name__ == "__main__":
