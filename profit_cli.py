@@ -27,6 +27,13 @@ def _parse_args() -> argparse.Namespace:
         help="Data source name to update (default: redfin)",
     )
 
+    seed = sub.add_parser("seed-regions", help="Seed canonical regions (countries + states/provinces)")
+    seed.add_argument(
+        "--countries",
+        nargs="*",
+        help="Optional list of country ISO2 codes to seed (default: all)",
+    )
+
     return parser.parse_args()
 
 
@@ -47,11 +54,21 @@ def _cmd_update(args: argparse.Namespace) -> int:
     return 0 if result.failed == 0 else 1
 
 
+def _cmd_seed_regions(args: argparse.Namespace) -> int:
+    from scripts.seed_regions import seed_regions
+
+    cfg = Config()
+    seed_regions(config=cfg, countries=args.countries)
+    return 0
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = _parse_args()
     if args.command == "update":
         return _cmd_update(args)
+    if args.command == "seed-regions":
+        return _cmd_seed_regions(args)
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2
 
