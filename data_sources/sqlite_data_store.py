@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,8 @@ class SqliteDataStore(DataSourceStore, ABC):
         data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = data_dir / db_name
         self.conn: Optional[sqlite3.Connection] = None
+        self._logged_open = False
+        self._logger = logging.getLogger(__name__)
 
     # Lazily open to avoid doing work when only describing the source.
     def _ensure_conn(self) -> sqlite3.Connection:
@@ -26,7 +29,17 @@ class SqliteDataStore(DataSourceStore, ABC):
             self.conn = sqlite3.connect(self.db_path)
             # Enforce FK constraints for reliable schemas.
             self.conn.execute("PRAGMA foreign_keys = ON;")
+            self.conn.execute("PRAGMA journal_mode=WAL;")
+            self.conn.execute("PRAGMA synchronous=NORMAL;")
+        if not self._logged_open:
+            self._logger.info("Opened sqlite database %s", self.db_path)
+            self._logged_open = True
         return self.conn
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Expose the lazily initialized connection for batch operations."""
+        return self._ensure_conn()
 
     @abstractmethod
     def describe_brief(self) -> str:
