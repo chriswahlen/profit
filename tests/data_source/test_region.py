@@ -57,15 +57,28 @@ class RegionIdTests(unittest.TestCase):
         self.assertEqual(rid, "region:county:us:tn:maury_county")
 
     def test_state_and_province(self):
-        self.assertEqual(Region.state(code="WA").canonical_id, "region:state:us:wa")
-        self.assertEqual(Region.province(code="Alberta", country_iso2="ca").canonical_id, "region:province:ca:alberta")
+        wa_named = Region.state(code="WA", name="Washington")
+        self.assertEqual(wa_named.canonical_id, "region:admin1:us:washington")
+        self.assertEqual(wa_named.name, "Washington")
+
+        wa_code = Region.state(code="WA")
+        self.assertEqual(wa_code.canonical_id, "region:admin1:us:wa")
+        self.assertEqual(wa_code.name, "WA")
+
+        ab = Region.province(code="AB", country_iso2="ca", name="Alberta")
+        self.assertEqual(ab.canonical_id, "region:admin1:ca:alberta")
+        self.assertEqual(ab.name, "Alberta")
 
     def test_parent_for_county_and_neighborhood(self):
         county = Region.county(name="Maury County, TN", state_code="TN")
-        self.assertEqual(county.parent().canonical_id, "region:state:us:tn")
+        parent = county.parent()
+        self.assertEqual(parent.canonical_id, "region:admin1:us:tn")
+        self.assertIn("region:state:us:tn", parent.alias_ids())
 
         nbh = Region.neighborhood(name="Ballard", city="Seattle", state_code="WA")
-        self.assertEqual(nbh.parent().canonical_id, "region:state:us:wa")
+        parent2 = nbh.parent()
+        self.assertEqual(parent2.canonical_id, "region:admin1:us:wa")
+        self.assertIn("region:state:us:wa", parent2.alias_ids())
 
     def test_parent_for_state(self):
         state = Region.state(code="WA")
