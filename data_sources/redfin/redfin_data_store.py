@@ -48,7 +48,6 @@ class RegionProviderMapEntry:
 @dataclass
 class MarketMetric:
     region_id: str
-    property_type: str
     property_type_id: str
     period_start_date: str
     period_granularity: str
@@ -127,11 +126,18 @@ class RedfinDataStore(SqliteDataStore):
                 UNIQUE (provider, provider_region_id)
             );
 
+            DROP TABLE IF EXISTS property_types;
+            CREATE TABLE property_types (
+                provider TEXT NOT NULL,
+                property_type_id TEXT NOT NULL,
+                property_type_name TEXT NOT NULL,
+                PRIMARY KEY (provider, property_type_id)
+            );
+
             DROP TABLE IF EXISTS market_metrics;
 
             CREATE TABLE market_metrics (
                 region_id TEXT NOT NULL REFERENCES regions(region_id),
-                property_type TEXT NOT NULL,
                 property_type_id TEXT NOT NULL,
                 period_start_date TEXT NOT NULL,
                 period_granularity TEXT NOT NULL,
@@ -149,11 +155,11 @@ class RedfinDataStore(SqliteDataStore):
                 months_supply REAL,
                 avg_ppsf REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (region_id, property_type, period_start_date, period_granularity)
+                PRIMARY KEY (region_id, property_type_id, period_start_date, period_granularity)
             );
 
             CREATE INDEX idx_market_metrics_region_period ON
-                market_metrics(region_id, property_type, period_start_date DESC);
+                market_metrics(region_id, property_type_id, period_start_date DESC);
             CREATE INDEX idx_market_metrics_period ON
                 market_metrics(period_start_date);
             CREATE INDEX idx_market_metrics_data_revision ON
@@ -269,6 +275,18 @@ class RedfinDataStore(SqliteDataStore):
             (provider, provider_region_id, region_id, provider_name, active_from, active_to, data_revision),
         )
 
+    def upsert_property_type(self, *, provider: str, property_type_id: str, property_type_name: str) -> None:
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            INSERT INTO property_types (provider, property_type_id, property_type_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(provider, property_type_id) DO UPDATE SET
+              property_type_name=excluded.property_type_name;
+            """,
+            (provider, property_type_id, property_type_name),
+        )
+
     def upsert_market_metrics(self, rows: Sequence[MarketMetric]) -> DataSourceUpdateResults:
         conn = self._ensure_conn()
         cur = conn.cursor()
@@ -278,13 +296,13 @@ class RedfinDataStore(SqliteDataStore):
         try:
             insert_sql = """
                 INSERT INTO market_metrics (
-                    region_id, property_type, property_type_id,
+                    region_id, property_type_id,
                     period_start_date, period_granularity, data_revision, source_provider,
                     median_sale_price, median_list_price, homes_sold, new_listings, inventory,
                     median_dom, sale_to_list_ratio, price_drops_pct, pending_sales,
                     months_supply, avg_ppsf
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(region_id, property_type, period_start_date, period_granularity) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(region_id, property_type_id, period_start_date, period_granularity) DO UPDATE SET
                     data_revision=excluded.data_revision,
                     source_provider=excluded.source_provider,
                     median_sale_price=excluded.median_sale_price,
@@ -304,7 +322,6 @@ class RedfinDataStore(SqliteDataStore):
                 batch.append(
                     (
                         r.region_id,
-                        r.property_type,
                         r.property_type_id,
                         r.period_start_date,
                         r.period_granularity,

@@ -62,36 +62,47 @@ class RedfinDataSource(DataSource):
         read_rows = 0
 
         self.logger.info("Opening Redfin data file %s", gz_path)
+        truncated = False
         with gzip.open(gz_path, "rt", encoding="utf-8") as fh:
             reader = csv.DictReader(fh, delimiter="\t", quotechar='"')
-            for idx, row in enumerate(reader, start=1):
-                try:
-                    region_id, data_revision = self._ensure_region(row, provider)
-                    metric = self._row_to_metric(row, region_id, data_revision, provider)
-                    metrics_batch.append(metric)
-                except Exception:
-                    failed += 1
-                    self.logger.exception("Failed to ingest row from %s", gz_path.name)
-                read_rows = idx
-                if idx % 5000 == 0:
-                    self.logger.info("Read %d rows from %s", idx, gz_path.name)
-                if len(metrics_batch) >= batch_flush_size:
-                    res = self.store.upsert_market_metrics(metrics_batch)
-                    updated += res.updated
-                    failed += res.failed
-                    self.logger.info(
-                        "Flushed %d metrics (total read %d) from %s",
-                        res.updated,
-                        read_rows,
-                        gz_path.name,
-                    )
-                    metrics_batch.clear()
+            try:
+                for idx, row in enumerate(reader, start=1):
+                    try:
+                        region_id, data_revision = self._ensure_region(row, provider)
+                        self._ensure_property_type(row, provider)
+                        metric = self._row_to_metric(row, region_id, data_revision, provider)
+                        metrics_batch.append(metric)
+                    except Exception:
+                        failed += 1
+                        self.logger.exception("Failed to ingest row from %s", gz_path.name)
+                    read_rows = idx
+                    if idx % 5000 == 0:
+                        self.logger.info("Read %d rows from %s", idx, gz_path.name)
+                    if len(metrics_batch) >= batch_flush_size:
+                        res = self.store.upsert_market_metrics(metrics_batch)
+                        updated += res.updated
+                        failed += res.failed
+                        self.logger.info(
+                            "Flushed %d metrics (total read %d) from %s",
+                            res.updated,
+                            read_rows,
+                            gz_path.name,
+                        )
+                        metrics_batch.clear()
+            except EOFError:
+                truncated = True
+                self.logger.warning("File truncated while reading %s after %d rows", gz_path.name, read_rows)
 
         if metrics_batch:
             res = self.store.upsert_market_metrics(metrics_batch)
             updated += res.updated
             failed += res.failed
-        self.logger.info("Imported %d rows from %s", updated, gz_path.name)
+        self.logger.info(
+            "Imported %d rows from %s%s",
+            updated,
+            gz_path.name,
+            " (truncated read)" if truncated else "",
+        )
 
         return updated, failed
 
@@ -171,7 +182,6 @@ class RedfinDataSource(DataSource):
 
         return MarketMetric(
             region_id=region_id,
-            property_type=row.get("PROPERTY_TYPE") or "",
             property_type_id=str(row.get("PROPERTY_TYPE_ID") or ""),
             period_start_date=row.get("PERIOD_BEGIN"),
             period_granularity=str(row.get("PERIOD_DURATION")),
@@ -200,3 +210,14 @@ class RedfinDataSource(DataSource):
             return int(ts.timestamp())
         except Exception:
             return 0
+
+    def _ensure_property_type(self, row: dict, provider: str) -> None:
+        prop_id = str(row.get("PROPERTY_TYPE_ID") or "")
+        prop_name = row.get("PROPERTY_TYPE") or ""
+        if not prop_id:
+            return
+        self.store.upsert_property_type(
+            provider=provider,
+            property_type_id=prop_id,
+            property_type_name=prop_name or prop_id,
+        )

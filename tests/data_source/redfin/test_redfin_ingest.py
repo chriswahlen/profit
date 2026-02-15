@@ -163,6 +163,9 @@ class RedfinIngestTest(unittest.TestCase):
         cur.execute("SELECT provider_region_id FROM region_provider_map;")
         self.assertEqual(cur.fetchone()[0], "12345")
 
+        cur.execute("SELECT COUNT(*) FROM property_types;")
+        self.assertEqual(cur.fetchone()[0], 2)
+
         # Ingestion run recorded.
         cur.execute("SELECT status, row_count FROM ingestion_runs;")
         status, row_count = cur.fetchone()
