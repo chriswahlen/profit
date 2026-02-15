@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "profit"
+version = "0.1.0"
+description = "Profit data ingestion and storage utilities"
+requires-python = ">=3.10"
+dependencies = [
+  "pycountry>=24.6.0",
+]
+
+[project.scripts]
+profit-cli = "profit_cli:main"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*"]
+
+[tool.setuptools]
+py-modules = ["profit_cli", "config"]
