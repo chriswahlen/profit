@@ -1,0 +1,17 @@
+.git
+__pycache__
+*.pyc
+*.sqlite3
+.cache
+data/
+fake_web
+*.egg-info
+venv/*
+datasets/*
+*.sqlite
+*.sqlite3
+node_modules/*
+package-lock.json
+build/*
+profit/cache/*.so
+tmp.db
