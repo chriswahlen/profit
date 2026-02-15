@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence, Tuple, Any
+from uuid import uuid4
+from datetime import datetime
 
 from config import Config
 from data_sources.data_store import DataSourceUpdateResults
@@ -45,6 +48,8 @@ class RegionProviderMapEntry:
 @dataclass
 class MarketMetric:
     region_id: str
+    property_type: str
+    property_type_id: str
     period_start_date: str
     period_granularity: str
     data_revision: int
@@ -110,15 +115,6 @@ class RedfinDataStore(SqliteDataStore):
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS region_code_map (
-                region_id TEXT NOT NULL REFERENCES regions(region_id),
-                code_type TEXT NOT NULL,
-                code_value TEXT NOT NULL,
-                active_from TEXT NOT NULL DEFAULT (datetime('now')),
-                active_to TEXT,
-                PRIMARY KEY (region_id, code_type, code_value, active_from)
-            );
-
             CREATE TABLE IF NOT EXISTS region_provider_map (
                 provider TEXT NOT NULL,
                 provider_region_id TEXT NOT NULL,
@@ -131,8 +127,12 @@ class RedfinDataStore(SqliteDataStore):
                 UNIQUE (provider, provider_region_id)
             );
 
-            CREATE TABLE IF NOT EXISTS market_metrics (
+            DROP TABLE IF EXISTS market_metrics;
+
+            CREATE TABLE market_metrics (
                 region_id TEXT NOT NULL REFERENCES regions(region_id),
+                property_type TEXT NOT NULL,
+                property_type_id TEXT NOT NULL,
                 period_start_date TEXT NOT NULL,
                 period_granularity TEXT NOT NULL,
                 data_revision INTEGER NOT NULL,
@@ -149,14 +149,14 @@ class RedfinDataStore(SqliteDataStore):
                 months_supply REAL,
                 avg_ppsf REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (region_id, period_start_date, period_granularity)
+                PRIMARY KEY (region_id, property_type, period_start_date, period_granularity)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_market_metrics_region_period ON
-                market_metrics(region_id, period_start_date DESC);
-            CREATE INDEX IF NOT EXISTS idx_market_metrics_period ON
+            CREATE INDEX idx_market_metrics_region_period ON
+                market_metrics(region_id, property_type, period_start_date DESC);
+            CREATE INDEX idx_market_metrics_period ON
                 market_metrics(period_start_date);
-            CREATE INDEX IF NOT EXISTS idx_market_metrics_data_revision ON
+            CREATE INDEX idx_market_metrics_data_revision ON
                 market_metrics(data_revision);
 
             CREATE TABLE IF NOT EXISTS ingestion_runs (
@@ -178,3 +178,213 @@ class RedfinDataStore(SqliteDataStore):
 
     def describe_detailed(self, *, indent: str = "  ") -> str:
         return super().describe_detailed(indent=indent)
+
+    # --- Helpers -----------------------------------------------------------------
+    @staticmethod
+    @staticmethod
+    def _slugify(text: str) -> str:
+        cleaned = []
+        last_sep = False
+        for ch in text.lower():
+            if ch.isalnum():
+                cleaned.append(ch)
+                last_sep = False
+            else:
+                if not last_sep:
+                    cleaned.append("_")
+                    last_sep = True
+        slug = "".join(cleaned).strip("_")
+        return slug or "unknown"
+
+    def canonical_region_code(self, region_type: str, region_name: str, state_code: Optional[str], city: Optional[str] = None) -> str:
+        from data_sources.region import Region
+
+        region = Region.from_fields(
+            region_type=region_type,
+            region_name=region_name,
+            country_iso2="us",
+            state_code=state_code,
+            city=city,
+        )
+        return region.canonical_id
+
+    # --- Upsert methods ----------------------------------------------------------
+    def upsert_region(
+        self,
+        *,
+        region_id: str,
+        region_type: str,
+        name: str,
+        canonical_code: str,
+        country_iso2: str,
+        parent_region_id: Optional[str] = None,
+        population: Optional[int] = None,
+        timezone: Optional[str] = None,
+        metadata: Optional[str] = None,
+    ) -> None:
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            INSERT INTO regions (
+                region_id, region_type, name, canonical_code, country_iso2,
+                parent_region_id, population, timezone, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(region_id) DO UPDATE SET
+                region_type=excluded.region_type,
+                name=excluded.name,
+                canonical_code=excluded.canonical_code,
+                country_iso2=excluded.country_iso2,
+                parent_region_id=excluded.parent_region_id,
+                population=excluded.population,
+                timezone=excluded.timezone,
+                metadata=excluded.metadata;
+            """,
+            (region_id, region_type, name, canonical_code, country_iso2, parent_region_id, population, timezone, metadata),
+        )
+
+    def upsert_region_provider_map(
+        self,
+        *,
+        provider: str,
+        provider_region_id: str,
+        region_id: str,
+        provider_name: Optional[str],
+        active_from: str,
+        active_to: Optional[str],
+        data_revision: int,
+    ) -> None:
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            INSERT INTO region_provider_map (
+                provider, provider_region_id, region_id, provider_name, active_from, active_to, data_revision
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, provider_region_id) DO UPDATE SET
+                region_id=excluded.region_id,
+                provider_name=excluded.provider_name,
+                active_from=excluded.active_from,
+                active_to=excluded.active_to,
+                data_revision=excluded.data_revision;
+            """,
+            (provider, provider_region_id, region_id, provider_name, active_from, active_to, data_revision),
+        )
+
+    def upsert_market_metrics(self, rows: Sequence[MarketMetric]) -> DataSourceUpdateResults:
+        conn = self._ensure_conn()
+        cur = conn.cursor()
+        updated = failed = 0
+        logger = logging.getLogger(__name__)
+        batch_size = 5000
+        try:
+            insert_sql = """
+                INSERT INTO market_metrics (
+                    region_id, property_type, property_type_id,
+                    period_start_date, period_granularity, data_revision, source_provider,
+                    median_sale_price, median_list_price, homes_sold, new_listings, inventory,
+                    median_dom, sale_to_list_ratio, price_drops_pct, pending_sales,
+                    months_supply, avg_ppsf
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(region_id, property_type, period_start_date, period_granularity) DO UPDATE SET
+                    data_revision=excluded.data_revision,
+                    source_provider=excluded.source_provider,
+                    median_sale_price=excluded.median_sale_price,
+                    median_list_price=excluded.median_list_price,
+                    homes_sold=excluded.homes_sold,
+                    new_listings=excluded.new_listings,
+                    inventory=excluded.inventory,
+                    median_dom=excluded.median_dom,
+                    sale_to_list_ratio=excluded.sale_to_list_ratio,
+                    price_drops_pct=excluded.price_drops_pct,
+                    pending_sales=excluded.pending_sales,
+                    months_supply=excluded.months_supply,
+                    avg_ppsf=excluded.avg_ppsf;
+            """
+            batch = []
+            for r in rows:
+                batch.append(
+                    (
+                        r.region_id,
+                        r.property_type,
+                        r.property_type_id,
+                        r.period_start_date,
+                        r.period_granularity,
+                        r.data_revision,
+                        r.source_provider,
+                        r.median_sale_price,
+                        r.median_list_price,
+                        r.homes_sold,
+                        r.new_listings,
+                        r.inventory,
+                        r.median_dom,
+                        r.sale_to_list_ratio,
+                        r.price_drops_pct,
+                        r.pending_sales,
+                        r.months_supply,
+                        r.avg_ppsf,
+                    )
+                )
+                if len(batch) >= batch_size:
+                    cur.executemany(insert_sql, batch)
+                    updated += len(batch)
+                    batch.clear()
+            if batch:
+                cur.executemany(insert_sql, batch)
+                updated += len(batch)
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            failed = len(rows)
+            logger.exception("Failed bulk upsert of %d market_metrics rows", len(rows), exc_info=exc)
+        return DataSourceUpdateResults(updated=updated, failed=failed)
+
+    def start_ingestion_run(self, *, provider: str, source_url: str | None = None, data_revision: Optional[int] = None) -> str:
+        run_id = str(uuid4())
+        started_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            INSERT INTO ingestion_runs (run_id, provider, started_at, status, source_url, data_revision)
+            VALUES (?, ?, ?, 'running', ?, ?);
+            """,
+            (run_id, provider, started_at, source_url, data_revision),
+        )
+        conn.commit()
+        return run_id
+
+    def finish_ingestion_run(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        row_count: int,
+        notes: Optional[str] = None,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+    ) -> None:
+        finished_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET status=?, finished_at=?, row_count=?, notes=COALESCE(?, notes),
+                etag=COALESCE(?, etag), last_modified=COALESCE(?, last_modified)
+            WHERE run_id=?;
+            """,
+            (status, finished_at, row_count, notes, etag, last_modified, run_id),
+        )
+        conn.commit()
+
+    def resolve_region_by_provider(self, provider: str, provider_region_id: str) -> Optional[str]:
+        conn = self._ensure_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT region_id FROM region_provider_map
+            WHERE provider = ? AND provider_region_id = ? AND (active_to IS NULL OR active_to >= date('now'))
+            ORDER BY active_from DESC
+            LIMIT 1;
+            """,
+            (provider, provider_region_id),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
