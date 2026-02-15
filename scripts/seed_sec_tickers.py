@@ -25,6 +25,10 @@ from config import Config
 from data_sources.entities import Company
 from data_sources.entity import Entity, EntityStore, EntityType
 
+# Relations
+RELATION_LISTED_SECURITY = "listed_security"
+US_EXCHANGE_MICS = {"XNAS", "XNYS", "XASE"}
+
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_PROVIDER = "provider:edgar"
 SEC_UA_ENV = "SEC_USER_AGENT"
@@ -65,6 +69,7 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
     store.upsert_provider(provider=SEC_PROVIDER, description="SEC EDGAR", base_url=SEC_TICKERS_URL)
     entity_rows = []
     provider_maps = []
+    relations = []
     for row in rows:
         comp = Company.from_name(row.name, country_iso2="US")
         entity = Entity(
@@ -75,6 +80,13 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
         )
         entity_rows.append(entity)
         provider_maps.append((SEC_PROVIDER, row.cik, comp.canonical_id, row.ticker))
+
+        # If the SEC ticker already exists as a security on a US MIC, link company -> security.
+        for mic in US_EXCHANGE_MICS:
+            sec_entity_id = f"sec:{mic.lower()}:{row.ticker.lower()}"
+            if store.entity_exists(sec_entity_id):
+                relations.append((comp.canonical_id, sec_entity_id))
+                break
 
     # Upsert entities
     for e in entity_rows:
@@ -87,6 +99,10 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
             active_from=None,
             metadata=f'{{"ticker":"{ticker}"}}',
         )
+
+    # Link companies to listed securities when found.
+    for src, dst in relations:
+        store.map_entity_relation(src_entity_id=src, dst_entity_id=dst, relation=RELATION_LISTED_SECURITY)
 
     logging.info("Seeded %d SEC companies; mapped %d tickers", len(entity_rows), len(provider_maps))
 

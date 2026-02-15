@@ -126,6 +126,17 @@ class EntityStore(SqliteDataStore):
             );
 
             CREATE INDEX IF NOT EXISTS idx_provider_map_entity ON provider_entity_map(entity_id);
+
+            CREATE TABLE IF NOT EXISTS entity_entity_map (
+                src_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
+                dst_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
+                relation TEXT NOT NULL,
+                metadata TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (src_entity_id, dst_entity_id, relation)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_entity_entity_dst ON entity_entity_map(dst_entity_id);
             """
         )
         conn.commit()
@@ -236,3 +247,37 @@ class EntityStore(SqliteDataStore):
                 (entity_id,),
             )
         return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def entity_exists(self, entity_id: str) -> bool:
+        conn = self._ensure_conn()
+        cur = conn.execute("SELECT 1 FROM entities WHERE entity_id = ? LIMIT 1;", (entity_id,))
+        return cur.fetchone() is not None
+
+    def map_entity_relation(
+        self,
+        *,
+        src_entity_id: str,
+        dst_entity_id: str,
+        relation: str,
+        metadata: Optional[str] = None,
+    ) -> DataSourceUpdateResults:
+        """Link two canonical entities with a typed relation."""
+
+        conn = self._ensure_conn()
+        cur = conn.cursor()
+        updated = failed = 0
+        try:
+            cur.execute(
+                """
+                INSERT INTO entity_entity_map (src_entity_id, dst_entity_id, relation, metadata)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(src_entity_id, dst_entity_id, relation) DO UPDATE SET
+                    metadata=excluded.metadata;
+                """,
+                (src_entity_id, dst_entity_id, relation, metadata),
+            )
+            updated = 1
+            conn.commit()
+        except Exception:
+            failed = 1
+        return DataSourceUpdateResults(updated=updated, failed=failed)
