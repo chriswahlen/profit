@@ -19,6 +19,7 @@ class EntityType(str, Enum):
     - CURRENCY:         ccy:iso4217                              (ccy:usd)
     - REGION:           pipe hierarchy                           (country|us, metro|us|dallas_ft_worth, city|us|texas|dallas)
     - SECURITY:         mic:ticker or isin or cusip              (XNYS:AAPL, isin:US0378331005)
+    - CRYPTO:           crypto:<slug>                           (crypto:btc)
     - INDEX:            index:provider:code                      (index:spglobal:sp500)
     - FUND:             mic:ticker or isin                       (XNYS:SPY, isin:US78462F1030)
     - ECON_SERIES:      econ:provider:series_id                  (econ:fred:CPIAUCSL)
@@ -44,6 +45,7 @@ class EntityType(str, Enum):
     CURRENCY = "currency"
     REGION = "region"
     SECURITY = "security"
+    CRYPTO = "crypto"
     INDEX = "index"
     FUND = "fund"
     ECON_SERIES = "econ_series"

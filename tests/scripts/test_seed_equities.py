@@ -7,7 +7,7 @@ from pathlib import Path
 
 from config import Config
 from data_sources.entity import EntityStore
-from scripts.seed_financedatabase import (
+from scripts.seed_equities import (
     seed_rows,
     load_csv,
     RELATION_COMPANY_ISSUER,
@@ -17,7 +17,7 @@ from scripts.seed_financedatabase import (
 )
 
 
-class FinanceDatabaseSeedTests(unittest.TestCase):
+class EquitiesSeedTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
         os.environ["PROFIT_DATA_PATH"] = str(Path(self.tmpdir.name) / "data")

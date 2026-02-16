@@ -4,7 +4,8 @@
 Commands:
   seed-regions           Seed canonical regions (countries + states/provinces)
   seed-sec               Seed SEC company tickers/entities
-  seed-financedatabase   Seed FinanceDatabase equities metadata
+  seed-equities          Seed FinanceDatabase equities metadata
+  seed-cryptos           Seed FinanceDatabase crypto metadata
   seed-exchanges         Seed exchange (market venue) entities
   seed-currencies        Seed ISO 4217 currencies
   seed-all               Run currencies -> regions -> exchanges -> sec
@@ -41,7 +42,7 @@ def _parse_args() -> argparse.Namespace:
         help="Optional local path to company_tickers.json (otherwise fetches from SEC)",
     )
 
-    seed_fd = sub.add_parser("seed-financedatabase", help="Seed from FinanceDatabase CSV exports")
+    seed_fd = sub.add_parser("seed-equities", help="Seed from FinanceDatabase CSV exports")
     seed_fd.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
     seed_fd.add_argument(
         "--asset-class",
@@ -52,6 +53,9 @@ def _parse_args() -> argparse.Namespace:
     seed_fd.add_argument("--limit", type=int, help="Optional row limit for testing")
 
     sub.add_parser("seed-exchanges", help="Seed exchange (market venue) entities")
+    seed_crypto = sub.add_parser("seed-cryptos", help="Seed FinanceDatabase crypto metadata")
+    seed_crypto.add_argument("--csv", required=True, help="Path to FinanceDatabase crypto CSV (e.g., cryptos.csv)")
+    seed_crypto.add_argument("--limit", type=int, help="Optional row limit for testing")
     sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
     sub.add_parser("seed-all", help="Run all seeds: currencies -> regions -> exchanges -> SEC")
 
@@ -81,12 +85,18 @@ def main() -> int:
         return _cmd_seed_regions(args)
     if args.command == "seed-sec":
         return _cmd_seed_sec(args)
-    if args.command == "seed-financedatabase":
-        from scripts.seed_financedatabase import main as fd_main
+    if args.command == "seed-equities":
+        from scripts.seed_equities import main as fd_main
         fd_args = ["--csv", args.csv, "--asset-class", args.asset_class]
         if args.limit:
             fd_args += ["--limit", str(args.limit)]
         return fd_main(fd_args)
+    if args.command == "seed-cryptos":
+        from scripts.seed_cryptos import main as crypto_main
+        crypto_args = ["--csv", args.csv]
+        if args.limit:
+            crypto_args += ["--limit", str(args.limit)]
+        return crypto_main(crypto_args)
     if args.command == "seed-exchanges":
         from scripts.seed_exchanges import main as seed_ex_main
         return seed_ex_main([])

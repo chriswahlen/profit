@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Seed canonical entities from FinanceDatabase CSV exports.
+"""Seed canonical equities from FinanceDatabase CSV exports.
 
-This script ingests FinanceDatabase listings (e.g., equities) into the
-canonical entity store. It maps provider symbols to canonical IDs using a
-static exchange→MIC lookup and records optional metadata such as sector,
-industry, currency, country, and ISIN.
+This script ingests FinanceDatabase equity listings into the canonical entity
+store. It maps provider symbols to canonical IDs using a static
+exchange→MIC lookup, records optional metadata such as sector, industry,
+currency, country, and ISIN, and links securities to companies.
 
 Usage:
-  python scripts/seed_financedatabase.py --csv path/to/equities.csv --asset-class equities
+  python scripts/seed_equities.py --csv path/to/equities.csv --asset-class equities
 """
 
 from __future__ import annotations
@@ -498,7 +498,7 @@ def load_csv(path: Path, limit: int | None = None) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Seed entities from FinanceDatabase CSV")
+    parser = argparse.ArgumentParser(description="Seed equities from FinanceDatabase CSV")
     parser.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
     parser.add_argument(
         "--asset-class",
@@ -519,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     store = EntityStore(cfg)
     rows = load_csv(csv_path, limit=args.limit)
     inserted, skipped = seed_rows(rows, store)
-    logging.info("FinanceDatabase seeded %d rows (skipped %d)", inserted, skipped)
+    logging.info("FinanceDatabase equities seeded %d rows (skipped %d)", inserted, skipped)
     return 0
 
 
