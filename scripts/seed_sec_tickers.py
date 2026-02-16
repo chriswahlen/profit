@@ -12,6 +12,8 @@ Requirements:
 
 from __future__ import annotations
 
+import argparse
+import ast
 import json
 import logging
 import os
@@ -77,7 +79,7 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
             entity_id=comp.canonical_id,
             entity_type=EntityType.COMPANY,
             name=row.name,
-            metadata=f"{{'cik':'{row.cik}'}}",
+            metadata=json.dumps({"cik": row.cik}, ensure_ascii=True),
         )
         entity_rows.append(entity)
         provider_maps.append((SEC_PROVIDER, row.cik, comp.canonical_id, row.ticker))
@@ -91,7 +93,13 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
 
     # Upsert entities
     for e in entity_rows:
-        store.upsert_entity(e)
+        if store.entity_exists(e.entity_id):
+            if e.entity_type == EntityType.COMPANY:
+                _merge_company_metadata(store, e)
+            else:
+                store.upsert_entity(e)
+        else:
+            store.upsert_entity(e)
     for provider, provider_id, eid, ticker in provider_maps:
         store.map_provider_entity(
             provider=provider,
@@ -105,6 +113,43 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
         store.map_entity_relation(src_entity_id=src, dst_entity_id=dst, relation=RELATION_LISTED_SECURITY)
 
     logging.info("Seeded %d SEC companies; mapped %d tickers", len(entity_rows), len(provider_maps))
+
+
+def _parse_metadata(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(raw)
+        except Exception:
+            logging.debug("Failed to parse metadata %r", raw)
+            return {}
+
+
+def _merge_company_metadata(store: EntityStore, entity: Entity) -> None:
+    cur = store.connection.execute(
+        "SELECT metadata FROM entities WHERE entity_id = ?",
+        (entity.entity_id,),
+    )
+    row = cur.fetchone()
+    existing = _parse_metadata(row[0] if row else "")
+    incoming = _parse_metadata(entity.metadata)
+    if not incoming:
+        logging.debug("No metadata to merge for %s", entity.entity_id)
+        return
+    merged = {**existing, **incoming}
+    if merged == existing:
+        logging.debug("Company %s metadata unchanged", entity.entity_id)
+        return
+    metadata_str = json.dumps(merged, ensure_ascii=True)
+    store.connection.execute(
+        "UPDATE entities SET metadata = ? WHERE entity_id = ?",
+        (metadata_str, entity.entity_id),
+    )
+    store.connection.commit()
+    logging.info("Merged metadata for existing company %s", entity.entity_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,8 +168,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     store = EntityStore(cfg)
-    rows = load_rows(local_path=local_path_arg, ua=ua)
-    seed(rows, store)
+    try:
+        rows = load_rows(local_path=local_path_arg, ua=ua)
+        seed(rows, store)
+    finally:
+        store.close()
     return 0
 
 

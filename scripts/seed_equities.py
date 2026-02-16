@@ -28,6 +28,10 @@ from data_sources.entity import Entity, EntityStore, EntityType
 from data_sources.entities import Company, Sector, Industry
 from scripts.seed_exchanges import EXCHANGES
 
+_COMPANY_METADATA_SOURCE = "financedatabase"
+
+_DEFAULT_EQUITIES_CSV = Path("incoming/datasets/fdb/equities.csv")
+
 # FinanceDatabase exchange codes to MIC mappings (subset focused on US + majors).
 EXCHANGE_TO_MIC = {
     # United States
@@ -221,6 +225,14 @@ COUNTRY_ALIASES: dict[str, str] = {
     "bahrain": "bh",
 }
 
+
+def _company_metadata_payload(**fields: str) -> str:
+    payload: dict[str, str] = {"source": _COMPANY_METADATA_SOURCE}
+    for key, value in fields.items():
+        if value:
+            payload[key] = value
+    return json.dumps(payload, ensure_ascii=True)
+
 def normalize_country_name(country: str | None) -> Optional[str]:
     """Return ISO2 code for a country name (cache results)."""
 
@@ -356,8 +368,11 @@ def infer_exchange_from_suffix(symbol: str) -> str | None:
     return None
 
 
-def row_metadata(_: dict) -> str:
-    return ""
+def row_metadata(row: dict) -> str:
+    payload: dict[str, str] = {}
+    if summary := (row.get("summary") or "").strip():
+        payload["summary"] = summary
+    return json.dumps(payload, ensure_ascii=True) if payload else ""
 
 
 def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
@@ -367,6 +382,7 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
     store.ensure_relation_type(RELATION_SECTOR, description="Security belongs to sector")
     store.ensure_relation_type(RELATION_INDUSTRY, description="Security belongs to industry")
     inserted = skipped = 0
+    created_companies: set[str] = set()
     for row in rows:
         symbol = (row.get("symbol") or "").strip().upper()
         provided_name = (row.get("name") or "").strip()
@@ -456,16 +472,27 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         if provided_name:
             try:
                 company = Company.from_name(provided_name, country_iso2=company_iso)
-                company_entity = Entity(
-                    entity_id=company.canonical_id,
-                    entity_type=EntityType.COMPANY,
-                    name=name,
-                )
-                store.upsert_entity(company_entity)
                 company_id = company.canonical_id
-                logging.debug("Linking company %s to security %s", company.canonical_id, cid)
+                if company_id not in created_companies:
+                    metadata = _company_metadata_payload(
+                        country_iso=company_iso,
+                        exchange=exchange,
+                        ticker=symbol,
+                    )
+                    if store.entity_exists(company_id):
+                        logging.info("Company %s already exists, skipping metadata insert", company_id)
+                    else:
+                        company_entity = Entity(
+                            entity_id=company_id,
+                            entity_type=EntityType.COMPANY,
+                            name=name,
+                            metadata=metadata,
+                        )
+                        store.upsert_entity(company_entity)
+                    created_companies.add(company_id)
+                logging.debug("Linking company %s to security %s", company_id, cid)
                 store.map_entity_relation(
-                    src_entity_id=company.canonical_id,
+                    src_entity_id=company_id,
                     dst_entity_id=cid,
                     relation=RELATION_COMPANY_ISSUER,
                 )
@@ -499,27 +526,23 @@ def load_csv(path: Path, limit: int | None = None) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed equities from FinanceDatabase CSV")
-    parser.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
-    parser.add_argument(
-        "--asset-class",
-        default="equities",
-        choices=["equities"],
-        help="Asset class to load (currently supports equities)",
-    )
     parser.add_argument("--limit", type=int, help="Optional row limit for testing")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    csv_path = Path(args.csv)
+    csv_path = _DEFAULT_EQUITIES_CSV
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
     cfg = Config()
     store = EntityStore(cfg)
-    rows = load_csv(csv_path, limit=args.limit)
-    inserted, skipped = seed_rows(rows, store)
-    logging.info("FinanceDatabase equities seeded %d rows (skipped %d)", inserted, skipped)
+    try:
+        rows = load_csv(csv_path, limit=args.limit)
+        inserted, skipped = seed_rows(rows, store)
+        logging.info("FinanceDatabase equities seeded %d rows (skipped %d)", inserted, skipped)
+    finally:
+        store.close()
     return 0
 
 

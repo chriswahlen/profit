@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+import json
 
 from config import Config
 from data_sources.entity import EntityStore
@@ -107,6 +108,23 @@ class EquitiesSeedTests(unittest.TestCase):
         ).fetchall()
         self.assertTrue(sector_map)
         self.assertTrue(industry_map)
+
+    def test_stores_summary_in_metadata(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "summary.csv"
+        csv_path.write_text(
+            "symbol,name,exchange,currency,country,sector,industry,isin,summary\n"
+            "AAPL,Apple Inc.,NMS,USD,United States,Technology,Consumer Electronics,US0378331005,Leading consumer tech brand\n"
+        )
+
+        rows = load_csv(csv_path)
+        inserted, skipped = seed_rows(rows, self.store)
+        self.assertEqual(inserted, 1)
+        self.assertEqual(skipped, 0)
+
+        metadata = self.store.connection.execute(
+            "SELECT metadata FROM entities WHERE entity_id='sec:xnas:aapl';"
+        ).fetchone()[0]
+        self.assertEqual(json.loads(metadata), {"summary": "Leading consumer tech brand"})
 
     def test_skips_company_when_name_missing(self):
         csv_path = Path(self.tmpdir.name) / "sample_missing_name.csv"

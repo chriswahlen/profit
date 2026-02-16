@@ -28,9 +28,11 @@ from scripts.seed_equities import (
 )
 
 _METADATA_FIELDS = ("summary", "category_group", "category")
+_DEFAULT_ETF_CSV = Path("incoming/datasets/fdb/etfs.csv")
 _PROGRESS_INTERVAL = 500
 _RELATION_ETF_FAMILY = "managed_by"
 _RELATION_LISTED_ON = "listed_on"
+_COMPANY_METADATA_SOURCE = "financedatabase"
 
 
 def _sanitize_symbol(symbol: str) -> str | None:
@@ -83,6 +85,11 @@ def _slugify(text: str) -> str:
 
 
 def fund_slug(row: dict[str, str]) -> str:
+    symbol_raw = (row.get("symbol") or "").strip()
+    if symbol_raw and "." in symbol_raw:
+        base_symbol = symbol_raw.split(".", 1)[0]
+        if slug := _sanitize_symbol(base_symbol):
+            return slug
     name = (row.get("name") or "").strip()
     family = (row.get("family") or "").strip()
     parts: list[str] = []
@@ -112,6 +119,7 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
     fund_created: set[str] = set()
     listed_relations: set[tuple[str, str]] = set()
     family_relations: set[tuple[str, str]] = set()
+    created_companies: set[str] = set()
 
     for idx, row in enumerate(rows, start=1):
         symbol = (row.get("symbol") or "").strip()
@@ -149,28 +157,39 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
                         name=mic.upper(),
                     )
                 )
+            relation_metadata = json.dumps({"symbol": symbol.strip()}, ensure_ascii=True)
             store.map_entity_relation(
                 src_entity_id=fund_id,
                 dst_entity_id=exchange_id,
                 relation=_RELATION_LISTED_ON,
+                metadata=relation_metadata,
             )
             listed_relations.add(listed_key)
 
         if family := (row.get("family") or "").strip():
             try:
                 company = Company.from_name(family, country_iso2=DEFAULT_COMPANY_COUNTRY)
-                company_entity = Entity(
-                    entity_id=company.canonical_id,
-                    entity_type=EntityType.COMPANY,
-                    name=company.name,
-                )
-                store.upsert_entity(company_entity)
-                family_key = (fund_id, company.canonical_id)
+                company_id = company.canonical_id
+                if company_id not in created_companies:
+                    metadata_payload = {"source": _COMPANY_METADATA_SOURCE, "family": family}
+                    metadata = json.dumps(metadata_payload, ensure_ascii=True)
+                    if store.entity_exists(company_id):
+                        logging.info("Company %s already exists, skipping metadata insert", company_id)
+                    else:
+                        company_entity = Entity(
+                            entity_id=company_id,
+                            entity_type=EntityType.COMPANY,
+                            name=company.name,
+                            metadata=metadata,
+                        )
+                        store.upsert_entity(company_entity)
+                    created_companies.add(company_id)
+                family_key = (fund_id, company_id)
                 if family_key not in family_relations:
-                    logging.debug("Linking ETF fund %s to family %s", fund_id, company.canonical_id)
+                    logging.debug("Linking ETF fund %s to family %s", fund_id, company_id)
                     store.map_entity_relation(
                         src_entity_id=fund_id,
-                        dst_entity_id=company.canonical_id,
+                        dst_entity_id=company_id,
                         relation=_RELATION_ETF_FAMILY,
                     )
                     family_relations.add(family_key)
@@ -185,21 +204,23 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed ETF entities from FinanceDatabase CSV")
-    parser.add_argument("--csv", required=True, help="Path to FinanceDatabase ETF CSV (e.g., etfs.csv)")
     parser.add_argument("--limit", type=int, help="Optional row limit for testing")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    csv_path = Path(args.csv)
+    csv_path = _DEFAULT_ETF_CSV
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
     logging.info("Starting ETF seed (csv=%s)", csv_path)
     cfg = Config()
     store = EntityStore(cfg)
-    rows = rows_from_csv(csv_path, limit=args.limit)
-    inserted, skipped = seed_rows(rows, store)
-    logging.info("Finished ETF seed: %d inserted, %d skipped", inserted, skipped)
+    try:
+        rows = rows_from_csv(csv_path, limit=args.limit)
+        inserted, skipped = seed_rows(rows, store)
+        logging.info("Finished ETF seed: %d inserted, %d skipped", inserted, skipped)
+    finally:
+        store.close()
     return 0
 
 

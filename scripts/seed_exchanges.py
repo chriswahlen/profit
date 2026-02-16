@@ -156,8 +156,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = Config()
     store = EntityStore(cfg)
-    inserted, skipped = seed_exchanges(EXCHANGES, store)
-    logging.info("Seeded %d exchanges (skipped %d)", inserted, skipped)
+    try:
+        inserted, skipped = seed_exchanges(EXCHANGES, store)
+        logging.info("Seeded %d exchanges (skipped %d)", inserted, skipped)
+    finally:
+        store.close()
     return 0
 
 

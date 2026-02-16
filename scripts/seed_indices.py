@@ -20,6 +20,7 @@ _PROVIDER = "provider:financedatabase"
 _RELATION_LISTED_ON = "listed_on"
 _PROGRESS_INTERVAL = 500
 _METADATA_FIELDS = ("summary", "category_group", "category")
+_DEFAULT_INDICES_CSV = Path("incoming/datasets/fdb/indices.csv")
 
 
 def _sanitize_symbol(symbol: str) -> str | None:
@@ -32,6 +33,14 @@ def _sanitize_symbol(symbol: str) -> str | None:
         base = base.split("-", 1)[0]
     if "." in base:
         base = base.split(".", 1)[0]
+    base = re.sub(r"[^A-Z0-9]+", "", base)
+    return base.lower() or None
+
+
+def _sanitize_symbol_with_suffix(symbol: str) -> str | None:
+    if not symbol:
+        return None
+    base = symbol.strip().upper()
     base = re.sub(r"[^A-Z0-9]+", "", base)
     return base.lower() or None
 
@@ -50,7 +59,7 @@ def _slugify(text: str) -> str:
 
 
 def index_slug(row: dict[str, str]) -> str:
-    symbol = _sanitize_symbol((row.get("symbol") or "").strip() or "")
+    symbol = _sanitize_symbol_with_suffix((row.get("symbol") or "").strip() or "")
     if symbol:
         return symbol
     name = (row.get("name") or "").strip()
@@ -162,21 +171,23 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed FinanceDatabase index entities")
-    parser.add_argument("--csv", required=True, help="Path to FinanceDatabase index CSV (e.g., indices.csv)")
     parser.add_argument("--limit", type=int, help="Optional row limit for testing")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    csv_path = Path(args.csv)
+    csv_path = _DEFAULT_INDICES_CSV
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
     logging.info("Starting index seed (csv=%s)", csv_path)
     cfg = Config()
     store = EntityStore(cfg)
-    rows = rows_from_csv(csv_path, limit=args.limit)
-    inserted, skipped = seed_rows(rows, store)
-    logging.info("Finished index seed: %d inserted, %d skipped", inserted, skipped)
+    try:
+        rows = rows_from_csv(csv_path, limit=args.limit)
+        inserted, skipped = seed_rows(rows, store)
+        logging.info("Finished index seed: %d inserted, %d skipped", inserted, skipped)
+    finally:
+        store.close()
     return 0
 
 

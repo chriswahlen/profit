@@ -36,35 +36,37 @@ def seed_currencies(
 ) -> None:
     """Seed currencies into the entity store from a mapping of code->name."""
     entity_store = EntityStore(config)
-    entity_store.upsert_provider(provider, description="Open Exchange Rates", base_url=OXR_CURRENCY_URL)
-
-    definitions = currency_map or fetch_currency_definitions()
     inserted = failed = 0
+    try:
+        entity_store.upsert_provider(provider, description="Open Exchange Rates", base_url=OXR_CURRENCY_URL)
 
-    for code, name in sorted(definitions.items()):
-        if not code or not code.strip():
-            logging.debug("Skipping blank currency code entry")
-            failed += 1
-            continue
+        definitions = currency_map or fetch_currency_definitions()
 
-        try:
-            currency = Currency.from_code(code)
-            entity = Entity(
-                entity_id=currency.canonical_id,
-                entity_type=EntityType.CURRENCY,
-                name=(name or code).strip(),
-            )
-            entity_store.upsert_entity(entity)
-            entity_store.map_provider_entity(
-                provider=provider,
-                provider_entity_id=code,
-                entity_id=currency.canonical_id,
-            )
-            inserted += 1
-        except Exception as exc:  # noqa: BLE001 - log and continue to next row
-            logging.warning("Failed to insert currency %s: %s", code, exc)
-            failed += 1
+        for code, name in sorted(definitions.items()):
+            if not code or not code.strip():
+                logging.debug("Skipping blank currency code entry")
+                failed += 1
+                continue
 
+            try:
+                currency = Currency.from_code(code)
+                entity = Entity(
+                    entity_id=currency.canonical_id,
+                    entity_type=EntityType.CURRENCY,
+                    name=(name or code).strip(),
+                )
+                entity_store.upsert_entity(entity)
+                entity_store.map_provider_entity(
+                    provider=provider,
+                    provider_entity_id=code,
+                    entity_id=currency.canonical_id,
+                )
+                inserted += 1
+            except Exception as exc:  # noqa: BLE001 - log and continue to next row
+                logging.warning("Failed to insert currency %s: %s", code, exc)
+                failed += 1
+    finally:
+        entity_store.close()
     logging.info("Seeded %d currencies (failed: %d)", inserted, failed)
 
 

@@ -26,48 +26,50 @@ def seed_regions(
 ) -> None:
     entity_store = EntityStore(config)
     inserted = 0
-
-    for country in _iter_countries(countries):
-        country_obj = pycountry.countries.get(alpha_2=country)
-        country_name = country_obj.name if country_obj else country
-        national = Region.national(country_iso2=country, name=country_name)
-        _upsert_region(
-            entity_store,
-            national,
-            provider,
-            provider_region_id=country,
-            metadata={
-                "iso_alpha2": country,
-                "iso_numeric": getattr(country_obj, "numeric", None),
-                "source": "pycountry/ISO3166-1",
-            },
-        )
-        inserted += 1
-
-        # Subdivisions (states/provinces/oblasts/etc.)
-        for subdiv in pycountry.subdivisions.get(country_code=country):
-            code = subdiv.code.split("-")[-1]
-            reg_type = _map_subdivision_type(country, subdiv.type)
-            region = Region.from_fields(
-                region_type=reg_type,
-                region_name=subdiv.name,
-                country_iso2=country,
-                state_code=code,
-            )
+    try:
+        for country in _iter_countries(countries):
+            country_obj = pycountry.countries.get(alpha_2=country)
+            country_name = country_obj.name if country_obj else country
+            national = Region.national(country_iso2=country, name=country_name)
             _upsert_region(
                 entity_store,
-                region,
+                national,
                 provider,
-                provider_region_id=subdiv.code,
-                parent_region_id=national.canonical_id,
+                provider_region_id=country,
                 metadata={
-                    "iso_code_full": subdiv.code,
-                    "iso_code": code,
-                    "iso_type": subdiv.type,
-                    "source": "pycountry/ISO3166-2",
+                    "iso_alpha2": country,
+                    "iso_numeric": getattr(country_obj, "numeric", None),
+                    "source": "pycountry/ISO3166-1",
                 },
             )
             inserted += 1
+
+            # Subdivisions (states/provinces/oblasts/etc.)
+            for subdiv in pycountry.subdivisions.get(country_code=country):
+                code = subdiv.code.split("-")[-1]
+                reg_type = _map_subdivision_type(country, subdiv.type)
+                region = Region.from_fields(
+                    region_type=reg_type,
+                    region_name=subdiv.name,
+                    country_iso2=country,
+                    state_code=code,
+                )
+                _upsert_region(
+                    entity_store,
+                    region,
+                    provider,
+                    provider_region_id=subdiv.code,
+                    parent_region_id=national.canonical_id,
+                    metadata={
+                        "iso_code_full": subdiv.code,
+                        "iso_code": code,
+                        "iso_type": subdiv.type,
+                        "source": "pycountry/ISO3166-2",
+                    },
+                )
+                inserted += 1
+    finally:
+        entity_store.close()
 
     logging.info("Seeded %d regions (entities only)", inserted)
 

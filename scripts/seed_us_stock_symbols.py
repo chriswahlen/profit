@@ -98,7 +98,10 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     cfg = Config()
     store = EntityStore(cfg)
-    seed(Path(args.csv), map_yfinance=args.map_yfinance, store=store)
+    try:
+        seed(Path(args.csv), map_yfinance=args.map_yfinance, store=store)
+    finally:
+        store.close()
     return 0
 
 

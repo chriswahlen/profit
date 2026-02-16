@@ -48,26 +48,17 @@ def _parse_args() -> argparse.Namespace:
 
     # Financial Database imports
     seed_fd = sub.add_parser("seed-equities", help="Seed from FinanceDatabase CSV exports")
-    seed_fd.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
-    seed_fd.add_argument(
-        "--asset-class",
-        default="equities",
-        choices=["equities"],
-        help="Asset class to load (currently supports equities)",
-    )
     seed_fd.add_argument("--limit", type=int, help="Optional row limit for testing")
     seed_crypto = sub.add_parser("seed-cryptos", help="Seed FinanceDatabase crypto metadata")
-    seed_crypto.add_argument("--csv", required=True, help="Path to FinanceDatabase crypto CSV (e.g., cryptos.csv)")
     seed_crypto.add_argument("--limit", type=int, help="Optional row limit for testing")
     seed_etf = sub.add_parser("seed-etfs", help="Seed FinanceDatabase ETF metadata")
-    seed_etf.add_argument("--csv", required=True, help="Path to FinanceDatabase ETF CSV (e.g., etfs.csv)")
     seed_etf.add_argument("--limit", type=int, help="Optional row limit for testing")
     seed_indices = sub.add_parser("seed-indices", help="Seed FinanceDatabase index metadata")
-    seed_indices.add_argument("--csv", required=True, help="Path to FinanceDatabase index CSV (e.g., indices.csv)")
     seed_indices.add_argument("--limit", type=int, help="Optional row limit for testing")
     seed_mm = sub.add_parser("seed-moneymarkets", help="Seed FinanceDatabase money market metadata")
-    seed_mm.add_argument("--csv", required=True, help="Path to FinanceDatabase money market CSV (e.g., moneymarkets.csv)")
     seed_mm.add_argument("--limit", type=int, help="Optional row limit for testing")
+    seed_funds = sub.add_parser("seed-funds", help="Seed FinanceDatabase fund metadata")
+    seed_funds.add_argument("--limit", type=int, help="Optional row limit for testing")
 
     sub.add_parser("seed-all", help="Run all seeds: currencies -> regions -> exchanges -> SEC")
 
@@ -99,34 +90,40 @@ def main() -> int:
         return _cmd_seed_sec(args)
     if args.command == "seed-equities":
         from scripts.seed_equities import main as fd_main
-        fd_args = ["--csv", args.csv, "--asset-class", args.asset_class]
+        fd_args: list[str] = []
         if args.limit:
             fd_args += ["--limit", str(args.limit)]
         return fd_main(fd_args)
     if args.command == "seed-cryptos":
         from scripts.seed_cryptos import main as crypto_main
-        crypto_args = ["--csv", args.csv]
+        crypto_args: list[str] = []
         if args.limit:
             crypto_args += ["--limit", str(args.limit)]
         return crypto_main(crypto_args)
     if args.command == "seed-etfs":
         from scripts.seed_etfs import main as etf_main
-        etf_args = ["--csv", args.csv]
+        etf_args: list[str] = []
         if args.limit:
             etf_args += ["--limit", str(args.limit)]
         return etf_main(etf_args)
     if args.command == "seed-indices":
         from scripts.seed_indices import main as idx_main
-        idx_args = ["--csv", args.csv]
+        idx_args: list[str] = []
         if args.limit:
             idx_args += ["--limit", str(args.limit)]
         return idx_main(idx_args)
     if args.command == "seed-moneymarkets":
         from scripts.seed_moneymarkets import main as mm_main
-        mm_args = ["--csv", args.csv]
+        mm_args: list[str] = []
         if args.limit:
             mm_args += ["--limit", str(args.limit)]
         return mm_main(mm_args)
+    if args.command == "seed-funds":
+        from scripts.seed_funds import main as fund_main
+        fund_args: list[str] = []
+        if args.limit:
+            fund_args += ["--limit", str(args.limit)]
+        return fund_main(fund_args)
     if args.command == "seed-exchanges":
         from scripts.seed_exchanges import main as seed_ex_main
         return seed_ex_main([])
@@ -136,6 +133,12 @@ def main() -> int:
         return 0
     if args.command == "seed-all":
         from scripts.seed_currencies import seed_currencies
+        from scripts.seed_cryptos import main as crypto_main
+        from scripts.seed_etfs import main as etf_main
+        from scripts.seed_indices import main as idx_main
+        from scripts.seed_moneymarkets import main as mm_main
+        from scripts.seed_funds import main as fund_main
+        from scripts.seed_equities import main as equities_main
         status = 0
         try:
             seed_currencies(config=Config())
@@ -144,8 +147,14 @@ def main() -> int:
         region_rc = _cmd_seed_regions(argparse.Namespace(countries=None))
         from scripts.seed_exchanges import main as seed_ex_main
         exch_rc = seed_ex_main([])
+        crypto_rc = crypto_main([])
+        etf_rc = etf_main([])
+        idx_rc = idx_main([])
+        mm_rc = mm_main([])
+        fund_rc = fund_main([])
+        equities_rc = equities_main([])
         sec_rc = _cmd_seed_sec(argparse.Namespace(local_json=None))
-        return 0 if status == region_rc == exch_rc == sec_rc == 0 else 1
+        return 0 if status == region_rc == exch_rc == crypto_rc == etf_rc == idx_rc == mm_rc == fund_rc == sec_rc == 0 else 1
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2

@@ -81,6 +81,33 @@ class ETFSeedTests(unittest.TestCase):
             0,
         )
 
+    def test_same_product_on_multiple_exchanges_shares_entity(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "multi.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,family,exchange\n"
+            "BE3C.HM,Berenberg Europe Focus R,EUR,Focuses on Europe,Equities,Developed Markets,,HAM\n"
+            "BE3C.MU,Berenberg Europe Focus R,EUR,Focuses on Europe,Equities,Developed Markets,,MUN\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+
+        self.assertEqual(inserted, 2)
+        self.assertEqual(skipped, 0)
+
+        fund_rows = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_type='etf';"
+        ).fetchall()
+        self.assertEqual(fund_rows, [("etf:be3c",)])
+
+        listed = self.store.connection.execute(
+            "SELECT dst_entity_id, metadata FROM entity_entity_map WHERE relation='listed_on' ORDER BY dst_entity_id;"
+        ).fetchall()
+        self.assertEqual(listed[0][0], "mic:xham")
+        self.assertEqual(listed[1][0], "mic:xmun")
+        self.assertEqual(json.loads(listed[0][1]), {"symbol": "BE3C.HM"})
+        self.assertEqual(json.loads(listed[1][1]), {"symbol": "BE3C.MU"})
+
 
 if __name__ == "__main__":
     unittest.main()

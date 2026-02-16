@@ -14,6 +14,7 @@ from data_sources.sqlite_data_store import SqliteDataStore
 FIXED_RELATION_TYPES: tuple[tuple[str, str], ...] = (
     ("traded_in", "Exchange trades in currency"),
     ("listed_on", "Security/ETF listed on exchange"),
+    ("listed_security", "Company is listed security"),
     ("issued_security", "Company issues the security"),
     ("managed_by", "ETF or product managed by fund family"),
     ("belongs_to_sector", "Security belongs to sector"),
@@ -174,6 +175,16 @@ class EntityStore(SqliteDataStore):
         conn = self._ensure_conn()
         cur = conn.cursor()
         updated = failed = 0
+        existing = conn.execute(
+            "SELECT entity_type FROM entities WHERE entity_id = ?",
+            (entity.entity_id,),
+        ).fetchone()
+        if (
+            existing
+            and entity.entity_type == EntityType.COMPANY
+            and existing[0] == EntityType.COMPANY.value
+        ):
+            raise ValueError(f"Company already exists: {entity.entity_id}")
         try:
             cur.execute(
                 """

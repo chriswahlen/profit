@@ -37,6 +37,12 @@ class EntityStoreProviderMapTests(unittest.TestCase):
         )
         self.assertIsNone(cur.fetchone()[0])
 
+    def test_duplicate_company_raises(self):
+        ent = Entity(entity_id="company:us:test-co", entity_type=EntityType.COMPANY, name="Test Co")
+        self.store.upsert_entity(ent)
+        with self.assertRaises(ValueError):
+            self.store.upsert_entity(ent)
+
 
 if __name__ == "__main__":
     unittest.main()

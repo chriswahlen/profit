@@ -21,6 +21,7 @@ from data_sources.entity import Entity, EntityStore, EntityType
 PROVIDER = "provider:financedatabase"
 _PROGRESS_INTERVAL = 500
 _SUMMARY_NAME_RE = re.compile(r"^(?P<name>[^\(\n]+?)(?:\s*\(|\s+is\b|\s+has\b|,|$)", re.IGNORECASE)
+_DEFAULT_CRYPTO_CSV = Path("incoming/datasets/fdb/cryptos.csv")
 
 
 def _normalize_asset_symbol(value: str) -> str | None:
@@ -123,26 +124,28 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Seed FinanceDatabase crypto metadata")
-    parser.add_argument("--csv", required=True, help="Path to FinanceDatabase crypto CSV (e.g., cryptos.csv)")
     parser.add_argument("--limit", type=int, help="Optional row limit for testing")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    csv_path = Path(args.csv)
+    csv_path = _DEFAULT_CRYPTO_CSV
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
     logging.info("Starting FinanceDatabase crypto seed (csv=%s)", csv_path)
     cfg = Config()
     store = EntityStore(cfg)
-    rows = rows_from_csv(csv_path, limit=args.limit)
-    processed, skipped, unique = seed_rows(rows, store)
-    logging.info(
-        "Finished FinanceDatabase crypto seed: %d rows processed, %d skipped, %d unique assets",
-        processed,
-        skipped,
-        unique,
-    )
+    try:
+        rows = rows_from_csv(csv_path, limit=args.limit)
+        processed, skipped, unique = seed_rows(rows, store)
+        logging.info(
+            "Finished FinanceDatabase crypto seed: %d rows processed, %d skipped, %d unique assets",
+            processed,
+            skipped,
+            unique,
+        )
+    finally:
+        store.close()
     return 0
 
 
