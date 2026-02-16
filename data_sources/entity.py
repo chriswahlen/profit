@@ -171,7 +171,7 @@ class EntityStore(SqliteDataStore):
         )
         conn.commit()
 
-    def upsert_entity(self, entity: Entity) -> DataSourceUpdateResults:
+    def upsert_entity(self, entity: Entity, overwrite: bool = False) -> DataSourceUpdateResults:
         conn = self._ensure_conn()
         cur = conn.cursor()
         updated = failed = 0
@@ -179,12 +179,8 @@ class EntityStore(SqliteDataStore):
             "SELECT entity_type FROM entities WHERE entity_id = ?",
             (entity.entity_id,),
         ).fetchone()
-        if (
-            existing
-            and entity.entity_type == EntityType.COMPANY
-            and existing[0] == EntityType.COMPANY.value
-        ):
-            raise ValueError(f"Company already exists: {entity.entity_id}")
+        if (existing and not overwrite):
+            raise ValueError(f"Entity already exists: {entity.entity_id}")
         try:
             cur.execute(
                 """
