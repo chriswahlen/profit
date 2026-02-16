@@ -43,6 +43,10 @@ def _parse_args() -> argparse.Namespace:
         help="Optional local path to company_tickers.json (otherwise fetches from SEC)",
     )
 
+    sub.add_parser("seed-exchanges", help="Seed exchange (market venue) entities")
+    sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
+
+    # Financial Database imports
     seed_fd = sub.add_parser("seed-equities", help="Seed from FinanceDatabase CSV exports")
     seed_fd.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
     seed_fd.add_argument(
@@ -52,8 +56,6 @@ def _parse_args() -> argparse.Namespace:
         help="Asset class to load (currently supports equities)",
     )
     seed_fd.add_argument("--limit", type=int, help="Optional row limit for testing")
-
-    sub.add_parser("seed-exchanges", help="Seed exchange (market venue) entities")
     seed_crypto = sub.add_parser("seed-cryptos", help="Seed FinanceDatabase crypto metadata")
     seed_crypto.add_argument("--csv", required=True, help="Path to FinanceDatabase crypto CSV (e.g., cryptos.csv)")
     seed_crypto.add_argument("--limit", type=int, help="Optional row limit for testing")
@@ -63,7 +65,10 @@ def _parse_args() -> argparse.Namespace:
     seed_indices = sub.add_parser("seed-indices", help="Seed FinanceDatabase index metadata")
     seed_indices.add_argument("--csv", required=True, help="Path to FinanceDatabase index CSV (e.g., indices.csv)")
     seed_indices.add_argument("--limit", type=int, help="Optional row limit for testing")
-    sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
+    seed_mm = sub.add_parser("seed-moneymarkets", help="Seed FinanceDatabase money market metadata")
+    seed_mm.add_argument("--csv", required=True, help="Path to FinanceDatabase money market CSV (e.g., moneymarkets.csv)")
+    seed_mm.add_argument("--limit", type=int, help="Optional row limit for testing")
+
     sub.add_parser("seed-all", help="Run all seeds: currencies -> regions -> exchanges -> SEC")
 
     return parser.parse_args()
@@ -116,6 +121,12 @@ def main() -> int:
         if args.limit:
             idx_args += ["--limit", str(args.limit)]
         return idx_main(idx_args)
+    if args.command == "seed-moneymarkets":
+        from scripts.seed_moneymarkets import main as mm_main
+        mm_args = ["--csv", args.csv]
+        if args.limit:
+            mm_args += ["--limit", str(args.limit)]
+        return mm_main(mm_args)
     if args.command == "seed-exchanges":
         from scripts.seed_exchanges import main as seed_ex_main
         return seed_ex_main([])
