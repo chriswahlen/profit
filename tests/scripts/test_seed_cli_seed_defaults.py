@@ -3,21 +3,21 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from profit_cli import _cmd_seed_ticker_defaults, NASDAQ_TICKER_URL, NYSE_TICKER_URL, AMEX_TICKER_URL
+from seed_cli import _cmd_seed_ticker_defaults, NASDAQ_TICKER_URL, NYSE_TICKER_URL, AMEX_TICKER_URL
 from data_sources.entity import EntityType
 
 
-class ProfitCliSeedDefaultsTests(unittest.TestCase):
-    def test_uses_hardcoded_nasdaq_url_and_mic(self):
+class SeedCliDefaultsTests(unittest.TestCase):
+    def test_uses_hardcoded_exchange_urls_and_mics(self):
         dummy_store = object()
 
         class DummyManager:
             def __init__(self, config=None):
                 self.entity_store = dummy_store
 
-        with mock.patch("profit_cli.DataSourceManager", DummyManager), \
-            mock.patch("profit_cli.load_tickers", side_effect=[["ABC", "XYZ"], ["IBM"], ["GSAT"]]) as load_mock, \
-            mock.patch("profit_cli.seed") as seed_mock:
+        with mock.patch("seed_cli.DataSourceManager", DummyManager), \
+            mock.patch("seed_cli.load_tickers", side_effect=[["ABC", "XYZ"], ["IBM"], ["GSAT"]]) as load_mock, \
+            mock.patch("seed_cli.seed") as seed_mock:
 
             rc = _cmd_seed_ticker_defaults()
 

@@ -96,7 +96,6 @@ def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
             provider=provider,
             provider_entity_id=provider_id,
             entity_id=eid,
-            active_from=None,
             metadata=f'{{"ticker":"{ticker}"}}',
         )
 

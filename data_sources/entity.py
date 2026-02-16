@@ -118,7 +118,7 @@ class EntityStore(SqliteDataStore):
                 provider TEXT NOT NULL REFERENCES providers(provider),
                 provider_entity_id TEXT NOT NULL,
                 entity_id TEXT NOT NULL REFERENCES entities(entity_id),
-                active_from TEXT NOT NULL DEFAULT (datetime('now')),
+                active_from TEXT DEFAULT NULL,
                 active_to TEXT,
                 metadata TEXT,
                 PRIMARY KEY (provider, provider_entity_id),
@@ -195,7 +195,7 @@ class EntityStore(SqliteDataStore):
                 """
                 INSERT INTO provider_entity_map (
                     provider, provider_entity_id, entity_id, active_from, active_to, metadata
-                ) VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(provider, provider_entity_id) DO UPDATE SET
                     entity_id=excluded.entity_id,
                     active_from=excluded.active_from,
