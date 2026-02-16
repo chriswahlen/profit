@@ -59,7 +59,6 @@ def seed_currencies(
                 provider=provider,
                 provider_entity_id=code,
                 entity_id=currency.canonical_id,
-                active_from="1970-01-01",
             )
             inserted += 1
         except Exception as exc:  # noqa: BLE001 - log and continue to next row

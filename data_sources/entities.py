@@ -74,3 +74,39 @@ class Exchange:
         if not mic or not mic.strip():
             raise ValueError("MIC is required for Exchange")
         return cls(mic=mic, name=name or mic.upper())
+
+
+@dataclass(frozen=True)
+class Sector:
+    name: str
+
+    @property
+    def canonical_id(self) -> str:
+        if not self.name or not self.name.strip():
+            raise ValueError("Sector name is required")
+        slug = _slugify(self.name)
+        return f"sector:financedatabase:{slug}"
+
+    @classmethod
+    def from_name(cls, name: str) -> "Sector":
+        if not name or not name.strip():
+            raise ValueError("Sector name is required")
+        return cls(name=name)
+
+
+@dataclass(frozen=True)
+class Industry:
+    name: str
+
+    @property
+    def canonical_id(self) -> str:
+        if not self.name or not self.name.strip():
+            raise ValueError("Industry name is required")
+        slug = _slugify(self.name)
+        return f"industry:financedatabase:{slug}"
+
+    @classmethod
+    def from_name(cls, name: str) -> "Industry":
+        if not name or not name.strip():
+            raise ValueError("Industry name is required")
+        return cls(name=name)

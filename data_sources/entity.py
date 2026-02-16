@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -165,7 +166,9 @@ class EntityStore(SqliteDataStore):
             updated = 1
             conn.commit()
         except Exception:
+            conn.rollback()
             failed = 1
+            logging.debug("Relation insert failed: %s -> %s (%s)", src_entity_id, dst_entity_id, relation)
         return DataSourceUpdateResults(updated=updated, failed=failed)
 
     def upsert_provider(self, provider: str, description: Optional[str] = None, base_url: Optional[str] = None) -> None:

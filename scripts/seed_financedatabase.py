@@ -17,10 +17,16 @@ import csv
 import json
 import logging
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
+try:
+    import pycountry
+except ImportError:
+    pycountry = None
 from config import Config
 from data_sources.entity import Entity, EntityStore, EntityType
+from data_sources.entities import Company, Sector, Industry
+from scripts.seed_exchanges import EXCHANGES
 
 # FinanceDatabase exchange codes to MIC mappings (subset focused on US + majors).
 EXCHANGE_TO_MIC = {
@@ -171,8 +177,86 @@ EXCHANGE_TO_MIC = {
     "BVMF": "BVMF",
 }
 
-PROVIDER = "provider:financedatabase"
 UNKNOWN_EXCHANGE_CODE = "UNKNOWN"
+DEFAULT_COMPANY_COUNTRY = "US"
+
+_COUNTRY_CACHE: dict[str, Optional[str]] = {}
+
+COUNTRY_ALIASES: dict[str, str] = {
+    "united states": "us",
+    "united states of america": "us",
+    "usa": "us",
+    "us": "us",
+    "canada": "ca",
+    "china": "cn",
+    "hong kong": "hk",
+    "south korea": "kr",
+    "korea, south": "kr",
+    "korea": "kr",
+    "japan": "jp",
+    "united kingdom": "gb",
+    "uk": "gb",
+    "france": "fr",
+    "germany": "de",
+    "australia": "au",
+    "india": "in",
+    "thailand": "th",
+    "taiwan": "tw",
+    "sweden": "se",
+    "brazil": "br",
+    "singapore": "sg",
+    "italy": "it",
+    "israel": "il",
+    "norway": "no",
+    "spain": "es",
+    "netherlands": "nl",
+    "brazil": "br",
+    "switzerland": "ch",
+    "denmark": "dk",
+    "ireland": "ie",
+    "poland": "pl",
+    "mexico": "mx",
+    "austria": "at",
+    "russia": "ru",
+    "bahrain": "bh",
+}
+
+def normalize_country_name(country: str | None) -> Optional[str]:
+    """Return ISO2 code for a country name (cache results)."""
+
+    if not country:
+        return None
+    key = country.strip()
+    if not key:
+        return None
+    lower_key = key.lower()
+    if lower_key in _COUNTRY_CACHE:
+        return _COUNTRY_CACHE[lower_key]
+    iso = None
+    if pycountry:
+        try:
+            match = pycountry.countries.lookup(key)
+            iso = match.alpha_2.lower()
+        except LookupError:
+            iso = None
+    if not iso:
+        iso = COUNTRY_ALIASES.get(lower_key)
+    _COUNTRY_CACHE[lower_key] = iso
+    return iso
+
+EXCHANGE_COUNTRY: dict[str, str] = {}
+for entry in EXCHANGES:
+    if entry.country:
+        iso = normalize_country_name(entry.country)
+        if iso:
+            EXCHANGE_COUNTRY[entry.mic.upper()] = iso
+
+PROVIDER = "provider:financedatabase"
+ISIN_PROVIDER = "provider:isin"
+ISIN_PROVIDER_DESC = "ANNA/ISIN registry"
+RELATION_COMPANY_ISSUER = "issued_security"
+RELATION_SECTOR = "belongs_to_sector"
+RELATION_INDUSTRY = "belongs_to_industry"
 
 
 def canonical_id(symbol: str, exchange: str) -> str | None:
@@ -272,27 +356,25 @@ def infer_exchange_from_suffix(symbol: str) -> str | None:
     return None
 
 
-def row_metadata(row: dict) -> str:
-    meta = {}
-    for key in ("sector", "industry", "isin"):
-        val = row.get(key)
-        if val:
-            meta[key] = val
-    return json.dumps(meta, ensure_ascii=True)
+def row_metadata(_: dict) -> str:
+    return ""
 
 
 def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
     store.upsert_provider(PROVIDER, description="FinanceDatabase symbols")
     store.ensure_relation_type("listed_on", description="Security listed on exchange")
+    store.ensure_relation_type(RELATION_COMPANY_ISSUER, description="Company issues the security")
+    store.ensure_relation_type(RELATION_SECTOR, description="Security belongs to sector")
+    store.ensure_relation_type(RELATION_INDUSTRY, description="Security belongs to industry")
     inserted = skipped = 0
     for row in rows:
         symbol = (row.get("symbol") or "").strip().upper()
-        name = (row.get("name") or "").strip()
+        provided_name = (row.get("name") or "").strip()
+        name = provided_name or symbol
         exchange = (row.get("exchange") or "").strip().upper()
 
         # If exchange missing, try to infer from symbol suffix.
         if not exchange:
-            inferred = infer_exchange_from_suffix(symbol)
             inferred = infer_exchange_from_suffix(symbol)
             exchange = inferred or UNKNOWN_EXCHANGE_CODE
 
@@ -307,12 +389,11 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         if not cid:
             skipped += 1
             continue
+        company_id = None
 
         entity = Entity(entity_id=cid, entity_type=EntityType.SECURITY, name=name, metadata=row_metadata(row))
         store.upsert_entity(entity)
         meta = None
-        if row.get("isin"):
-            meta = json.dumps({"isin": row.get("isin")})
         store.map_provider_entity(
             provider=PROVIDER,
             provider_entity_id=symbol,
@@ -323,10 +404,83 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         )
         # Link security to its exchange if we have a mapped MIC (and not UNKNOWN).
         if mic := EXCHANGE_TO_MIC.get(exchange) or (exchange if exchange == UNKNOWN_EXCHANGE_CODE else None):
+            logging.debug("Linking security %s to exchange %s", cid, mic)
             store.map_entity_relation(
                 src_entity_id=cid,
                 dst_entity_id=f"mic:{mic.lower()}",
                 relation="listed_on",
+            )
+
+        sector_val = (row.get("sector") or "").strip()
+        if sector_val:
+            try:
+                sector = Sector.from_name(sector_val)
+                sector_entity = Entity(
+                    entity_id=sector.canonical_id,
+                    entity_type=EntityType.SECTOR,
+                    name=sector.name,
+                )
+                store.upsert_entity(sector_entity)
+                store.map_entity_relation(
+                    src_entity_id=cid,
+                    dst_entity_id=sector_entity.entity_id,
+                    relation=RELATION_SECTOR,
+                )
+            except ValueError:
+                logging.debug("Skipping sector entity for %s", sector_val)
+
+        industry_val = (row.get("industry") or "").strip()
+        if industry_val:
+            try:
+                industry = Industry.from_name(industry_val)
+                industry_entity = Entity(
+                    entity_id=industry.canonical_id,
+                    entity_type=EntityType.INDUSTRY,
+                    name=industry.name,
+                )
+                store.upsert_entity(industry_entity)
+                store.map_entity_relation(
+                    src_entity_id=cid,
+                    dst_entity_id=industry_entity.entity_id,
+                    relation=RELATION_INDUSTRY,
+                )
+            except ValueError:
+                logging.debug("Skipping industry entity for %s", industry_val)
+
+        company_iso = (
+            normalize_country_name(row.get("country"))
+            or EXCHANGE_COUNTRY.get(exchange)
+            or DEFAULT_COMPANY_COUNTRY.lower()
+        )
+        company_id = None
+        if provided_name:
+            try:
+                company = Company.from_name(provided_name, country_iso2=company_iso)
+                company_entity = Entity(
+                    entity_id=company.canonical_id,
+                    entity_type=EntityType.COMPANY,
+                    name=name,
+                )
+                store.upsert_entity(company_entity)
+                company_id = company.canonical_id
+                logging.debug("Linking company %s to security %s", company.canonical_id, cid)
+                store.map_entity_relation(
+                    src_entity_id=company.canonical_id,
+                    dst_entity_id=cid,
+                    relation=RELATION_COMPANY_ISSUER,
+                )
+            except ValueError:
+                logging.debug("Skipping company creation for %s (country iso %s)", symbol, company_iso)
+
+        isin = (row.get("isin") or "").strip()
+        if isin.lower() == "not available":
+            isin = ""
+        if isin and company_id:
+            store.upsert_provider(ISIN_PROVIDER, description=ISIN_PROVIDER_DESC)
+            store.map_provider_entity(
+                provider=ISIN_PROVIDER,
+                provider_entity_id=isin,
+                entity_id=company_id,
             )
         inserted += 1
     return inserted, skipped
