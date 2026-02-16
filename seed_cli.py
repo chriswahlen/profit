@@ -60,6 +60,9 @@ def _parse_args() -> argparse.Namespace:
     seed_etf = sub.add_parser("seed-etfs", help="Seed FinanceDatabase ETF metadata")
     seed_etf.add_argument("--csv", required=True, help="Path to FinanceDatabase ETF CSV (e.g., etfs.csv)")
     seed_etf.add_argument("--limit", type=int, help="Optional row limit for testing")
+    seed_indices = sub.add_parser("seed-indices", help="Seed FinanceDatabase index metadata")
+    seed_indices.add_argument("--csv", required=True, help="Path to FinanceDatabase index CSV (e.g., indices.csv)")
+    seed_indices.add_argument("--limit", type=int, help="Optional row limit for testing")
     sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
     sub.add_parser("seed-all", help="Run all seeds: currencies -> regions -> exchanges -> SEC")
 
@@ -107,6 +110,12 @@ def main() -> int:
         if args.limit:
             etf_args += ["--limit", str(args.limit)]
         return etf_main(etf_args)
+    if args.command == "seed-indices":
+        from scripts.seed_indices import main as idx_main
+        idx_args = ["--csv", args.csv]
+        if args.limit:
+            idx_args += ["--limit", str(args.limit)]
+        return idx_main(idx_args)
     if args.command == "seed-exchanges":
         from scripts.seed_exchanges import main as seed_ex_main
         return seed_ex_main([])
