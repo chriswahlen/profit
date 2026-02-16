@@ -41,11 +41,11 @@ class IndexSeedTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual(len(index_rows), 2)
         ids = {row[0] for row in index_rows}
-        self.assertEqual(ids, {"index:xshg:000123ss", "index:xnys:spx"})
+        self.assertEqual(ids, {"index:000123ss", "index:spx"})
         metadata = {row[0]: json.loads(row[2]) for row in index_rows}
-        self.assertEqual(metadata["index:xshg:000123ss"]["currency"], "ccy:cny")
-        self.assertEqual(metadata["index:xshg:000123ss"]["summary"], "Tracks innovators")
-        self.assertEqual(metadata["index:xshg:000123ss"]["category_group"], "Equities")
+        self.assertEqual(metadata["index:000123ss"]["currency"], "ccy:cny")
+        self.assertEqual(metadata["index:000123ss"]["summary"], "Tracks innovators")
+        self.assertEqual(metadata["index:000123ss"]["category_group"], "Equities")
 
         provider_map = self.store.connection.execute(
             "SELECT provider_entity_id FROM provider_entity_map WHERE provider='provider:financedatabase' ORDER BY provider_entity_id;"
@@ -53,11 +53,49 @@ class IndexSeedTests(unittest.TestCase):
         self.assertEqual([row[0] for row in provider_map], ["000123.SS", "SPX"])
 
         listed_relations = self.store.connection.execute(
-            "SELECT src_entity_id, dst_entity_id, relation FROM entity_entity_map WHERE relation='listed_on' ORDER BY src_entity_id;"
+            "SELECT src_entity_id, dst_entity_id FROM entity_entity_map WHERE relation='listed_on' ORDER BY src_entity_id;"
         ).fetchall()
         self.assertEqual(len(listed_relations), 2)
-        dests = {row[1] for row in listed_relations}
-        self.assertEqual(dests, {"mic:xshg", "mic:xnys"})
+        self.assertEqual({row[1] for row in listed_relations}, {"mic:xshg", "mic:xnys"})
+
+    def test_same_index_different_exchanges_collapsed(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "multi.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,exchange\n"
+            "F4GTTE.FGI,FTSE4Good TIP Taiwan ESG Index,TWD,Tracks TIP Taiwan,Equities,ESG,FGI\n"
+            "F4GTTE.TW,FTSE4Good TIP Taiwan ESG Index,TWD,Tracks TIP Taiwan,Equities,ESG,TWI\n"
+        )
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 2)
+        self.assertEqual(skipped, 0)
+
+        entries = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_type='index';"
+        ).fetchall()
+        self.assertEqual(entries, [("index:f4gtte",)])
+        listed = self.store.connection.execute(
+            "SELECT dst_entity_id FROM entity_entity_map WHERE src_entity_id='index:f4gtte' ORDER BY dst_entity_id;"
+        ).fetchall()
+        self.assertEqual({row[0] for row in listed}, {"mic:xfg", "mic:xtai"})
+
+    def test_metadata_diff_creates_new_index(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "diff.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,exchange\n"
+            "F4GTTE,FTSE4Good TIP Taiwan ESG Index,TWD,Tracks TIP Taiwan,Equities,ESG,FGI\n"
+            "F4GTTE,FTSE4Good TIP Taiwan ESG Index,CNY,Tracks TIP Taiwan (CNY),Equities,ESG,TWI\n"
+        )
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 2)
+        ids = {
+            row[0]
+            for row in self.store.connection.execute(
+                "SELECT entity_id FROM entities WHERE entity_type='index';"
+            ).fetchall()
+        }
+        self.assertEqual(ids, {"index:f4gtte", "index:f4gtte.tw"})
 
     def test_skips_rows_without_symbol(self) -> None:
         rows = [{"symbol": "", "name": "", "currency": "", "summary": "", "category_group": "", "category": "", "exchange": ""}]

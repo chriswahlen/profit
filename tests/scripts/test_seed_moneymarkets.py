@@ -41,7 +41,7 @@ class MoneyMarketSeedTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual(len(fund_rows), 1)
         fund_id, metadata = fund_rows[0]
-        self.assertEqual(fund_id, "fund:xnys:spxmm")
+        self.assertEqual(fund_id, "fund:spxmm")
         payload = json.loads(metadata)
         self.assertEqual(payload["currency"], "ccy:usd")
         self.assertEqual(payload["family"], "Some Family")
@@ -58,6 +58,50 @@ class MoneyMarketSeedTests(unittest.TestCase):
         self.assertEqual(len(listed_relations), 1)
         self.assertEqual(listed_relations[0][0], fund_id)
         self.assertEqual(listed_relations[0][1], "mic:xnys")
+
+    def test_same_money_market_multiple_exchanges_collapses(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "multi.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,family,exchange\n"
+            "09AA.BE,Value Investm Klas Fds T,EUR,Value strategy,Value Investm,BER\n"
+            "09AA.DU,Value Investm Klas Fds T,EUR,Value strategy,Value Investm,DUS\n"
+            "09AA.HM,Value Investm Klas Fds T,EUR,Value strategy,Value Investm,HAM\n"
+            "09AA.MU,Value Investm Klas Fds T,EUR,Value strategy,Value Investm,MUN\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 4)
+        self.assertEqual(skipped, 0)
+
+        entries = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_type='fund';"
+        ).fetchall()
+        self.assertEqual(entries, [("fund:09aa",)])
+
+        listed = self.store.connection.execute(
+            "SELECT dst_entity_id FROM entity_entity_map WHERE src_entity_id='fund:09aa' AND relation='listed_on' ORDER BY dst_entity_id;"
+        ).fetchall()
+        self.assertEqual({row[0] for row in listed}, {"mic:xber", "mic:xdus", "mic:xham", "mic:xmun"})
+
+    def test_metadata_difference_creates_alt_entity(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "diff.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,family,exchange\n"
+            "09AA.BE,Value Investm Klas Fds T,EUR,Value strategy,Value Investm,BER\n"
+            "09AA.BE,Value Investm Klas Fds T,CNY,Value strategy (CNY),Value Investm,BER\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 2)
+        self.assertEqual(skipped, 0)
+
+        ids = {
+            row[0]
+            for row in self.store.connection.execute("SELECT entity_id FROM entities WHERE entity_type='fund';").fetchall()
+        }
+        self.assertEqual(ids, {"fund:09aa", "fund:09aa.be"})
 
     def test_skips_missing_symbol(self) -> None:
         rows = [{"symbol": "", "name": "", "currency": "", "summary": "", "family": "", "exchange": ""}]

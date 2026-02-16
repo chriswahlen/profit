@@ -27,12 +27,63 @@ from scripts.seed_equities import (
     infer_exchange_from_suffix,
 )
 
-_METADATA_FIELDS = ("summary", "category_group", "category")
+_METADATA_FIELDS = ("summary", "category_group", "category", "family")
 _DEFAULT_ETF_CSV = Path("incoming/datasets/fdb/etfs.csv")
 _PROGRESS_INTERVAL = 500
 _RELATION_ETF_FAMILY = "managed_by"
 _RELATION_LISTED_ON = "listed_on"
 _COMPANY_METADATA_SOURCE = "financedatabase"
+
+
+def _parse_metadata(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        logging.debug("Failed to parse metadata %r", value)
+        return {}
+
+
+def _merge_fund_metadata(store: EntityStore, fund_id: str, name: str | None, metadata: str) -> None:
+    incoming = _parse_metadata(metadata)
+    if not incoming and not name:
+        return
+    cur = store.connection.execute("SELECT metadata FROM entities WHERE entity_id = ?", (fund_id,))
+    row = cur.fetchone()
+    existing = _parse_metadata(row[0] if row and row[0] else None)
+    merged = {**existing, **incoming}
+    if merged == existing and not name:
+        return
+    metadata_payload = json.dumps(merged, ensure_ascii=True) if merged else ""
+    entity = Entity(entity_id=fund_id, entity_type=EntityType.ETF, name=name, metadata=metadata_payload)
+    store.upsert_entity(entity, overwrite=True)
+
+
+def _metadata_matches(existing_name: str | None, existing_meta: dict[str, str], new_name: str | None, new_meta: dict[str, str]) -> bool:
+    if existing_name and new_name and existing_name != new_name:
+        return False
+    for key in existing_meta.keys() & new_meta.keys():
+        if existing_meta[key] != new_meta[key]:
+            return False
+    return True
+
+
+def _get_entity_data(store: EntityStore, entity_id: str) -> tuple[str | None, dict[str, str]]:
+    cur = store.connection.execute("SELECT name, metadata FROM entities WHERE entity_id = ?", (entity_id,))
+    row = cur.fetchone()
+    name = row[0] if row else None
+    return name, _parse_metadata(row[1] if row and row[1] else None)
+
+
+def _alternate_entity_id(slug: str, symbol: str) -> str:
+    parts = symbol.lower().split(".", 1)
+    base = _sanitize_symbol(parts[0]) or slug
+    suffix = parts[1] if len(parts) > 1 else ""
+    if suffix:
+        suffix = suffix.replace(".", "-")
+        return f"{base}.{suffix}"
+    return base
 
 
 def _sanitize_symbol(symbol: str) -> str | None:
@@ -86,7 +137,7 @@ def _slugify(text: str) -> str:
 
 def fund_slug(row: dict[str, str]) -> str:
     symbol_raw = (row.get("symbol") or "").strip()
-    if symbol_raw and "." in symbol_raw:
+    if symbol_raw:
         base_symbol = symbol_raw.split(".", 1)[0]
         if slug := _sanitize_symbol(base_symbol):
             return slug
@@ -99,7 +150,7 @@ def fund_slug(row: dict[str, str]) -> str:
         parts.append(_slugify(name))
     slug = "-".join(part for part in parts if part)
     if not slug:
-        slug = _sanitize_symbol(row.get("symbol") or "") or "etf"
+        slug = _sanitize_symbol(symbol_raw) or "etf"
     return slug
 
 
@@ -130,24 +181,40 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
         slug = fund_slug(row)
         fund_id = f"etf:{slug}"
         fund_name = (row.get("name") or symbol).strip() or None
+        metadata_str = fund_metadata(row)
+        metadata_dict = _parse_metadata(metadata_str)
+        entity_id = fund_id
         if fund_id not in fund_created:
             fund_entity = Entity(
                 entity_id=fund_id,
                 entity_type=EntityType.ETF,
                 name=fund_name,
-                metadata=fund_metadata(row),
+                metadata=metadata_str,
             )
             store.upsert_entity(fund_entity)
             fund_created.add(fund_id)
         else:
-            if fund_name:
-                store.upsert_entity(
-                    Entity(entity_id=fund_id, entity_type=EntityType.ETF, name=fund_name)
-                )
+            existing_name, existing_meta = _get_entity_data(store, fund_id)
+            if _metadata_matches(existing_name, existing_meta, fund_name, metadata_dict):
+                _merge_fund_metadata(store, fund_id, fund_name, metadata_str)
+            else:
+                alt_slug = _alternate_entity_id(slug, symbol)
+                entity_id = f"etf:{alt_slug}"
+                if entity_id not in fund_created:
+                    alt_entity = Entity(
+                        entity_id=entity_id,
+                        entity_type=EntityType.ETF,
+                        name=fund_name,
+                        metadata=metadata_str,
+                    )
+                    store.upsert_entity(alt_entity)
+                    fund_created.add(entity_id)
+                else:
+                    _merge_fund_metadata(store, entity_id, fund_name, metadata_str)
 
         mic = _resolve_mic(row.get("exchange"), symbol)
         exchange_id = f"mic:{mic.lower()}"
-        listed_key = (fund_id, exchange_id)
+        listed_key = (entity_id, exchange_id)
         if listed_key not in listed_relations:
             if not store.entity_exists(exchange_id):
                 store.upsert_entity(
@@ -159,7 +226,7 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
                 )
             relation_metadata = json.dumps({"symbol": symbol.strip()}, ensure_ascii=True)
             store.map_entity_relation(
-                src_entity_id=fund_id,
+                src_entity_id=entity_id,
                 dst_entity_id=exchange_id,
                 relation=_RELATION_LISTED_ON,
                 metadata=relation_metadata,
@@ -184,7 +251,7 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
                         )
                         store.upsert_entity(company_entity)
                     created_companies.add(company_id)
-                family_key = (fund_id, company_id)
+                family_key = (entity_id, company_id)
                 if family_key not in family_relations:
                     logging.debug("Linking ETF fund %s to family %s", fund_id, company_id)
                     store.map_entity_relation(

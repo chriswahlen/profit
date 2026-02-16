@@ -40,8 +40,8 @@ class ETFSeedTests(unittest.TestCase):
             "SELECT entity_id, entity_type, name, metadata FROM entities WHERE entity_type='etf' ORDER BY entity_id;"
         ).fetchall()
         self.assertEqual(len(fund_rows), 2)
-        self.assertTrue("spdr-s-p-500-etf-trust" in fund_rows[0][0])
-        self.assertTrue("vanguard-total-stock-market-etf" in fund_rows[1][0])
+        entity_ids = {row[0] for row in fund_rows}
+        self.assertEqual(entity_ids, {"etf:spy", "etf:vti"})
         fund_meta = json.loads(fund_rows[0][3])
         self.assertEqual(fund_meta["category_group"], "Equities")
         self.assertEqual(fund_meta["category"], "Large Cap")
@@ -80,6 +80,98 @@ class ETFSeedTests(unittest.TestCase):
             self.store.connection.execute("SELECT COUNT(*) FROM entities WHERE entity_type='etf';").fetchone()[0],
             0,
         )
+
+    def test_symbol_driven_slug(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "symbol.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,family,exchange\n"
+            "VUCP,Vanguard USD Corporate Bond UCITS ETF,USD,Corporate bond exposure,Fixed Income,Bonds,,LON\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+
+        self.assertEqual(inserted, 1)
+        self.assertEqual(skipped, 0)
+        entity = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_type='etf';"
+        ).fetchone()[0]
+        self.assertEqual(entity, "etf:vucp")
+
+    def test_duplicate_rows_merge_metadata(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "merge.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,family,exchange\n"
+            "BE3C.HM,Berenberg Europe Focus R,EUR,Focus on Europe,Equities,Developed Markets,,HAM\n"
+            "BE3C.MU,Berenberg Europe Focus R,EUR,,Alternatives,,AltShares,MUN\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 2)
+        self.assertEqual(skipped, 0)
+
+        base_meta = json.loads(
+            self.store.connection.execute(
+                "SELECT metadata FROM entities WHERE entity_id='etf:be3c';"
+            ).fetchone()[0]
+        )
+        alt_meta = json.loads(
+            self.store.connection.execute(
+                "SELECT metadata FROM entities WHERE entity_id='etf:be3c.mu';"
+            ).fetchone()[0]
+        )
+        self.assertEqual(
+            base_meta,
+            {"summary": "Focus on Europe", "category_group": "Equities", "category": "Developed Markets"},
+        )
+        self.assertEqual(
+            alt_meta,
+            {"category_group": "Alternatives", "family": "AltShares"},
+        )
+
+    def test_metadata_diff_creates_new_entity(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "metadata.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,family,exchange\n"
+            "ARB,AltShares Merger Arbitrage ETF,USD,Merger arbitrage,Alternatives,,AltShares,PCX\n"
+            "ARB.TO,Accelerate Arbitrage Fund,CAD,Accelerate arbitrage,Alternatives,,Accelerate Financial Technologies,TOR\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 2)
+        entity_ids = {
+            row[0]
+            for row in self.store.connection.execute("SELECT entity_id FROM entities WHERE entity_type='etf';").fetchall()
+        }
+        self.assertEqual(entity_ids, {"etf:arb", "etf:arb.to"})
+
+    def test_multi_exchange_rows_with_same_metadata_do_not_split(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "same-meta.csv"
+        csv_path.write_text(
+            "symbol,name,currency,summary,category_group,category,family,exchange\n"
+            "09AA.BE,Value Investm Klas Fds T,EUR,Value strategy,,Value Fund,Value Investm,BER\n"
+            "09AA.DU,Value Investm Klas Fds T,EUR,Value strategy,,Value Fund,Value Investm,DUS\n"
+            "09AA.HM,Value Investm Klas Fds T,EUR,Value strategy,,Value Fund,Value Investm,HAM\n"
+            "09AA.MU,Value Investm Klas Fds T,EUR,Value strategy,,Value Fund,Value Investm,MUN\n"
+        )
+
+        rows = list(rows_from_csv(csv_path))
+        inserted, skipped = seed_rows(rows, self.store, progress_interval=1)
+        self.assertEqual(inserted, 4)
+        self.assertEqual(skipped, 0)
+
+        rows = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_type='etf';"
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], "etf:09aa")
+
+        listed = self.store.connection.execute(
+            "SELECT dst_entity_id FROM entity_entity_map WHERE src_entity_id='etf:09aa' AND relation='listed_on' ORDER BY dst_entity_id;"
+        ).fetchall()
+        self.assertEqual({row[0] for row in listed}, {"mic:xber", "mic:xdus", "mic:xham", "mic:xmun"})
 
     def test_same_product_on_multiple_exchanges_shares_entity(self) -> None:
         csv_path = Path(self.tmpdir.name) / "multi.csv"

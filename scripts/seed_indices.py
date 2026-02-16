@@ -23,6 +23,57 @@ _METADATA_FIELDS = ("summary", "category_group", "category")
 _DEFAULT_INDICES_CSV = Path("incoming/datasets/fdb/indices.csv")
 
 
+def _parse_metadata(value: str | None) -> dict[str, str]:
+    if not value:
+        return {}
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        logging.debug("Failed to parse metadata %r", value)
+        return {}
+
+
+def _merge_index_metadata(store: EntityStore, entity_id: str, name: str | None, metadata: str) -> None:
+    incoming = _parse_metadata(metadata)
+    if not incoming and not name:
+        return
+    cur = store.connection.execute("SELECT metadata FROM entities WHERE entity_id = ?", (entity_id,))
+    row = cur.fetchone()
+    existing = _parse_metadata(row[0] if row and row[0] else None)
+    merged = {**existing, **incoming}
+    if merged == existing and not name:
+        return
+    metadata_payload = json.dumps(merged, ensure_ascii=True) if merged else ""
+    entity = Entity(entity_id=entity_id, entity_type=EntityType.INDEX, name=name, metadata=metadata_payload)
+    store.upsert_entity(entity, overwrite=True)
+
+
+def _metadata_matches(existing_name: str | None, existing_meta: dict[str, str], new_name: str | None, new_meta: dict[str, str]) -> bool:
+    if existing_name and new_name and existing_name != new_name:
+        return False
+    for key in existing_meta.keys() & new_meta.keys():
+        if existing_meta[key] != new_meta[key]:
+            return False
+    return True
+
+
+def _get_entity_data(store: EntityStore, entity_id: str) -> tuple[str | None, dict[str, str]]:
+    cur = store.connection.execute("SELECT name, metadata FROM entities WHERE entity_id = ?", (entity_id,))
+    row = cur.fetchone()
+    name = row[0] if row else None
+    return name, _parse_metadata(row[1] if row and row[1] else None)
+
+
+def _alternate_index_id(slug: str, symbol: str) -> str:
+    parts = symbol.lower().split(".", 1)
+    base = _sanitize_symbol(parts[0]) or slug
+    suffix = parts[1] if len(parts) > 1 else ""
+    if suffix:
+        suffix = suffix.replace(".", "-")
+        return f"{base}.{suffix}"
+    return base
+
+
 def _sanitize_symbol(symbol: str) -> str | None:
     if not symbol:
         return None
@@ -59,9 +110,14 @@ def _slugify(text: str) -> str:
 
 
 def index_slug(row: dict[str, str]) -> str:
-    symbol = _sanitize_symbol_with_suffix((row.get("symbol") or "").strip() or "")
-    if symbol:
-        return symbol
+    symbol_raw = (row.get("symbol") or "").strip()
+    if symbol_raw:
+        base_symbol = symbol_raw.split(".", 1)[0]
+        if slug := _sanitize_symbol(base_symbol):
+            return slug
+        slug = _sanitize_symbol_with_suffix(symbol_raw)
+        if slug:
+            return slug
     name = (row.get("name") or "").strip()
     if name:
         return _slugify(name)
@@ -81,9 +137,6 @@ def index_metadata(row: dict[str, str]) -> str:
             payload["currency"] = currency.canonical_id
         except ValueError:
             logging.debug("Skipping invalid currency %s for index %s", currency_val, row.get("symbol"))
-    exchange = (row.get("exchange") or "").strip()
-    if exchange:
-        payload["exchange"] = exchange
     return json.dumps(payload, ensure_ascii=True) if payload else ""
 
 
@@ -126,42 +179,62 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
             continue
 
         slug = index_slug(row)
-        exchange_key = (row.get("exchange") or "").strip()
-        mic = _resolve_mic(exchange_key, symbol)
-        index_id = f"index:{mic.lower()}:{slug}"
+        base_id = f"index:{slug}"
         name = (row.get("name") or symbol).strip() or None
-        metadata = index_metadata(row)
+        metadata_str = index_metadata(row)
+        metadata_dict = _parse_metadata(metadata_str)
 
-        first_entity = index_id not in created_indices
-        if first_entity:
+        entity_id = base_id
+        if base_id not in created_indices:
             store.upsert_entity(
-                Entity(entity_id=index_id, entity_type=EntityType.INDEX, name=name, metadata=metadata)
+                Entity(entity_id=base_id, entity_type=EntityType.INDEX, name=name, metadata=metadata_str)
             )
-            created_indices.add(index_id)
+            created_indices.add(base_id)
             inserted += 1
         else:
-            logging.debug("Skipping duplicate index insert for %s", index_id)
+            existing_name, existing_meta = _get_entity_data(store, base_id)
+            if _metadata_matches(existing_name, existing_meta, name, metadata_dict):
+                _merge_index_metadata(store, base_id, name, metadata_str)
+            else:
+                alt_slug = _alternate_index_id(slug, symbol)
+                entity_id = f"index:{alt_slug}"
+                if entity_id not in created_indices:
+                    store.upsert_entity(
+                        Entity(entity_id=entity_id, entity_type=EntityType.INDEX, name=name, metadata=metadata_str)
+                    )
+                    created_indices.add(entity_id)
+                    inserted += 1
+                else:
+                    _merge_index_metadata(store, entity_id, name, metadata_str)
 
         symbol_key = symbol.upper()
         if symbol_key not in mapped_provider_symbols:
             store.map_provider_entity(
                 provider=_PROVIDER,
                 provider_entity_id=symbol_key,
-                entity_id=index_id,
+                entity_id=entity_id,
                 active_from=None,
                 active_to=None,
                 metadata=None,
             )
             mapped_provider_symbols.add(symbol_key)
 
+        exchange_key = (row.get("exchange") or "").strip()
+        mic = _resolve_mic(exchange_key, symbol)
         exchange_id = f"mic:{mic.lower()}"
-        relation_key = (index_id, exchange_id)
+        relation_key = (entity_id, exchange_id)
         if relation_key not in listed_relations:
             if not store.entity_exists(exchange_id):
                 store.upsert_entity(
                     Entity(entity_id=exchange_id, entity_type=EntityType.MARKET_VENUE, name=mic.upper())
                 )
-            store.map_entity_relation(src_entity_id=index_id, dst_entity_id=exchange_id, relation=_RELATION_LISTED_ON)
+            relation_metadata = json.dumps({"symbol": symbol.upper()}, ensure_ascii=True)
+            store.map_entity_relation(
+                src_entity_id=entity_id,
+                dst_entity_id=exchange_id,
+                relation=_RELATION_LISTED_ON,
+                metadata=relation_metadata,
+            )
             listed_relations.add(relation_key)
 
         if idx % progress_interval == 0:
