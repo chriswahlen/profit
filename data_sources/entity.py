@@ -11,6 +11,16 @@ from data_sources.data_store import DataSourceUpdateResults
 from data_sources.sqlite_data_store import SqliteDataStore
 
 
+FIXED_RELATION_TYPES: tuple[tuple[str, str], ...] = (
+    ("traded_in", "Exchange trades in currency"),
+    ("listed_on", "Security/ETF listed on exchange"),
+    ("issued_security", "Company issues the security"),
+    ("managed_by", "ETF or product managed by fund family"),
+    ("belongs_to_sector", "Security belongs to sector"),
+    ("belongs_to_industry", "Security belongs to industry"),
+)
+
+
 class EntityType(str, Enum):
     """Canonical entity types and expected ID formats.
 
@@ -20,6 +30,7 @@ class EntityType(str, Enum):
     - REGION:           pipe hierarchy                           (country|us, metro|us|dallas_ft_worth, city|us|texas|dallas)
     - SECURITY:         mic:ticker or isin or cusip              (XNYS:AAPL, isin:US0378331005)
     - CRYPTO:           crypto:<slug>                           (crypto:btc)
+    - ETF:              etf:<slug>                              (etf:spdr-s-p-500-etf-trust)
     - INDEX:            index:provider:code                      (index:spglobal:sp500)
     - FUND:             mic:ticker or isin                       (XNYS:SPY, isin:US78462F1030)
     - ECON_SERIES:      econ:provider:series_id                  (econ:fred:CPIAUCSL)
@@ -46,6 +57,7 @@ class EntityType(str, Enum):
     REGION = "region"
     SECURITY = "security"
     CRYPTO = "crypto"
+    ETF = "etf"
     INDEX = "index"
     FUND = "fund"
     ECON_SERIES = "econ_series"
@@ -146,6 +158,15 @@ class EntityStore(SqliteDataStore):
                 description TEXT
             );
             """
+        )
+        conn.commit()
+        ins = conn.cursor()
+        ins.executemany(
+            """
+            INSERT OR IGNORE INTO entity_relation_types (relation, description)
+            VALUES (?, ?);
+            """,
+            FIXED_RELATION_TYPES,
         )
         conn.commit()
 
@@ -265,15 +286,9 @@ class EntityStore(SqliteDataStore):
 
     def ensure_relation_type(self, relation: str, description: Optional[str] = None) -> None:
         conn = self._ensure_conn()
-        conn.execute(
-            """
-            INSERT INTO entity_relation_types (relation, description)
-            VALUES (?, ?)
-            ON CONFLICT(relation) DO UPDATE SET description=COALESCE(excluded.description, entity_relation_types.description);
-            """,
-            (relation, description),
-        )
-        conn.commit()
+        cur = conn.execute("SELECT 1 FROM entity_relation_types WHERE relation = ?;", (relation,))
+        if cur.fetchone() is None:
+            raise ValueError(f"Unknown entity relation type: {relation!r}")
 
     def map_entity_relation(
         self,

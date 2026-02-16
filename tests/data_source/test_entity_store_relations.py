@@ -28,13 +28,13 @@ class EntityStoreRelationTests(unittest.TestCase):
         self.assertTrue(self.store.entity_exists(a.entity_id))
         self.assertFalse(self.store.entity_exists("sec:xnas:msft"))
 
-        res = self.store.map_entity_relation(src_entity_id=b.entity_id, dst_entity_id=a.entity_id, relation="lists_on")
+        res = self.store.map_entity_relation(src_entity_id=b.entity_id, dst_entity_id=a.entity_id, relation="listed_on")
         self.assertEqual(res.updated, 1)
 
         cur = self.store.connection.execute(
             "SELECT src_entity_id, dst_entity_id, relation FROM entity_entity_map;"
         )
-        self.assertEqual(cur.fetchall(), [(b.entity_id, a.entity_id, "lists_on")])
+        self.assertEqual(cur.fetchall(), [(b.entity_id, a.entity_id, "listed_on")])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ Commands:
   seed-equities          Seed FinanceDatabase equities metadata
   seed-cryptos           Seed FinanceDatabase crypto metadata
   seed-exchanges         Seed exchange (market venue) entities
+  seed-etfs             Seed FinanceDatabase ETF metadata
   seed-currencies        Seed ISO 4217 currencies
   seed-all               Run currencies -> regions -> exchanges -> sec
 """
@@ -56,6 +57,9 @@ def _parse_args() -> argparse.Namespace:
     seed_crypto = sub.add_parser("seed-cryptos", help="Seed FinanceDatabase crypto metadata")
     seed_crypto.add_argument("--csv", required=True, help="Path to FinanceDatabase crypto CSV (e.g., cryptos.csv)")
     seed_crypto.add_argument("--limit", type=int, help="Optional row limit for testing")
+    seed_etf = sub.add_parser("seed-etfs", help="Seed FinanceDatabase ETF metadata")
+    seed_etf.add_argument("--csv", required=True, help="Path to FinanceDatabase ETF CSV (e.g., etfs.csv)")
+    seed_etf.add_argument("--limit", type=int, help="Optional row limit for testing")
     sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
     sub.add_parser("seed-all", help="Run all seeds: currencies -> regions -> exchanges -> SEC")
 
@@ -97,6 +101,12 @@ def main() -> int:
         if args.limit:
             crypto_args += ["--limit", str(args.limit)]
         return crypto_main(crypto_args)
+    if args.command == "seed-etfs":
+        from scripts.seed_etfs import main as etf_main
+        etf_args = ["--csv", args.csv]
+        if args.limit:
+            etf_args += ["--limit", str(args.limit)]
+        return etf_main(etf_args)
     if args.command == "seed-exchanges":
         from scripts.seed_exchanges import main as seed_ex_main
         return seed_ex_main([])
