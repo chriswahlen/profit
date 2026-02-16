@@ -5,26 +5,30 @@ import unittest
 from unittest import mock
 
 import seed_cli
+import scripts.seed_exchanges as seed_exchanges
+from config import Config
 
 
 class SeedCliSeedAllTests(unittest.TestCase):
     def test_runs_all_in_order(self):
         calls = []
 
-        with mock.patch("seed_cli._cmd_seed_regions", side_effect=lambda args: calls.append("regions") or 0), \
-            mock.patch("seed_cli._cmd_seed_ticker_defaults", side_effect=lambda: calls.append("ticker") or 0), \
-            mock.patch("seed_cli._cmd_seed_sec", side_effect=lambda args: calls.append("sec") or 0):
+        with mock.patch("scripts.seed_currencies.seed_currencies", side_effect=lambda cfg: calls.append("currencies") or 0), \
+            mock.patch("seed_cli._cmd_seed_regions", side_effect=lambda ns: calls.append("regions") or 0), \
+            mock.patch("scripts.seed_exchanges.main", side_effect=lambda args=None: calls.append("exchanges") or 0), \
+            mock.patch("seed_cli._cmd_seed_sec", side_effect=lambda ns: calls.append("sec") or 0):
 
-            rc = seed_cli.main.__wrapped__ if hasattr(seed_cli.main, "__wrapped__") else seed_cli.main
-            # Cannot pass through main easily; instead call _cmd sequence directly.
-            # Simulate the branch logic:
+            from scripts.seed_currencies import seed_currencies
+            currency_rc = seed_currencies(Config())
             region_rc = seed_cli._cmd_seed_regions(argparse.Namespace(countries=None))
-            ticker_rc = seed_cli._cmd_seed_ticker_defaults()
+            exch_rc = seed_exchanges.main([])
             sec_rc = seed_cli._cmd_seed_sec(argparse.Namespace(local_json=None))
-            overall_rc = 0 if region_rc == ticker_rc == sec_rc == 0 else 1
 
-        self.assertEqual(overall_rc, 0)
-        self.assertEqual(calls, ["regions", "ticker", "sec"])
+        self.assertEqual(calls, ["currencies", "regions", "exchanges", "sec"])
+        self.assertEqual(currency_rc, 0)
+        self.assertEqual(region_rc, 0)
+        self.assertEqual(exch_rc, 0)
+        self.assertEqual(sec_rc, 0)
 
 
 if __name__ == "__main__":
