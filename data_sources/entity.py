@@ -130,13 +130,18 @@ class EntityStore(SqliteDataStore):
             CREATE TABLE IF NOT EXISTS entity_entity_map (
                 src_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
                 dst_entity_id TEXT NOT NULL REFERENCES entities(entity_id),
-                relation TEXT NOT NULL,
+                relation TEXT NOT NULL REFERENCES entity_relation_types(relation),
                 metadata TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (src_entity_id, dst_entity_id, relation)
             );
 
             CREATE INDEX IF NOT EXISTS idx_entity_entity_dst ON entity_entity_map(dst_entity_id);
+
+            CREATE TABLE IF NOT EXISTS entity_relation_types (
+                relation TEXT PRIMARY KEY,
+                description TEXT
+            );
             """
         )
         conn.commit()
@@ -253,6 +258,18 @@ class EntityStore(SqliteDataStore):
         cur = conn.execute("SELECT 1 FROM entities WHERE entity_id = ? LIMIT 1;", (entity_id,))
         return cur.fetchone() is not None
 
+    def ensure_relation_type(self, relation: str, description: Optional[str] = None) -> None:
+        conn = self._ensure_conn()
+        conn.execute(
+            """
+            INSERT INTO entity_relation_types (relation, description)
+            VALUES (?, ?)
+            ON CONFLICT(relation) DO UPDATE SET description=COALESCE(excluded.description, entity_relation_types.description);
+            """,
+            (relation, description),
+        )
+        conn.commit()
+
     def map_entity_relation(
         self,
         *,
@@ -264,6 +281,8 @@ class EntityStore(SqliteDataStore):
         """Link two canonical entities with a typed relation."""
 
         conn = self._ensure_conn()
+        # Ensure relation type exists to satisfy FK and keep definitions consistent.
+        self.ensure_relation_type(relation, description=None)
         cur = conn.cursor()
         updated = failed = 0
         try:

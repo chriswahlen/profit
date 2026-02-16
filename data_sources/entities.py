@@ -56,3 +56,21 @@ class Company:
         if not name or not name.strip():
             raise ValueError("Company name is required")
         return cls(country_iso2=country_iso2, name=name)
+
+
+@dataclass(frozen=True)
+class Exchange:
+    mic: str
+    name: str | None = None
+
+    @property
+    def canonical_id(self) -> str:
+        if not self.mic or not self.mic.strip():
+            raise ValueError("MIC is required for Exchange")
+        return f"mic:{self.mic.strip().lower()}"
+
+    @classmethod
+    def from_mic(cls, mic: str, name: str | None = None) -> "Exchange":
+        if not mic or not mic.strip():
+            raise ValueError("MIC is required for Exchange")
+        return cls(mic=mic, name=name or mic.upper())

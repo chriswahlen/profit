@@ -67,6 +67,7 @@ def load_rows(*, local_path: Path | None, ua: str) -> list[SecRow]:
 
 def seed(rows: Iterable[SecRow], store: EntityStore) -> None:
     store.upsert_provider(provider=SEC_PROVIDER, description="SEC EDGAR", base_url=SEC_TICKERS_URL)
+    store.ensure_relation_type(RELATION_LISTED_SECURITY, description="Company is listed security")
     entity_rows = []
     provider_maps = []
     relations = []

@@ -46,7 +46,18 @@ def _parse_args() -> argparse.Namespace:
     )
 
     sub.add_parser("seed-ticker-defaults", help="Seed hard-coded ticker lists for US exchanges (XNAS/XNYS/XASE)")
-    sub.add_parser("seed-all", help="Run all seeds: regions -> ticker-defaults -> SEC")
+    sub.add_parser("seed-all", help="Run all seeds: regions -> exchanges -> ticker-defaults -> SEC")
+    seed_fd = sub.add_parser("seed-financedatabase", help="Seed from FinanceDatabase CSV exports")
+    seed_fd.add_argument("--csv", required=True, help="Path to FinanceDatabase CSV (e.g., equities.csv)")
+    seed_fd.add_argument(
+        "--asset-class",
+        default="equities",
+        choices=["equities"],
+        help="Asset class to load (currently supports equities)",
+    )
+    seed_fd.add_argument("--limit", type=int, help="Optional row limit for testing")
+    sub.add_parser("seed-exchanges", help="Seed exchange (market venue) entities")
+    sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
 
     return parser.parse_args()
 
@@ -124,12 +135,34 @@ def main() -> int:
         return _cmd_seed_sec(args)
     if args.command == "seed-ticker-defaults":
         return _cmd_seed_ticker_defaults()
+    if args.command == "seed-exchanges":
+        from scripts.seed_exchanges import main as seed_ex_main
+        return seed_ex_main([])
+    if args.command == "seed-currencies":
+        from scripts.seed_currencies import seed_currencies
+        cfg = Config()
+        seed_currencies(config=cfg)
+        return 0
+    if args.command == "seed-financedatabase":
+        from scripts.seed_financedatabase import main as fd_main
+        fd_args = ["--csv", args.csv, "--asset-class", args.asset_class]
+        if args.limit:
+            fd_args += ["--limit", str(args.limit)]
+        return fd_main(fd_args)
     if args.command == "seed-all":
-        # Order: regions -> ticker defaults -> SEC
+        # Order: currencies -> regions -> exchanges -> ticker defaults -> SEC
+        from scripts.seed_currencies import seed_currencies
+        cur_rc = 0
+        try:
+            seed_currencies(config=Config())
+        except Exception:
+            cur_rc = 1
         region_rc = _cmd_seed_regions(argparse.Namespace(countries=None))
+        from scripts.seed_exchanges import main as seed_ex_main
+        exch_rc = seed_ex_main([])
         ticker_rc = _cmd_seed_ticker_defaults()
         sec_rc = _cmd_seed_sec(argparse.Namespace(local_json=None))
-        return 0 if region_rc == ticker_rc == sec_rc == 0 else 1
+        return 0 if cur_rc == region_rc == exch_rc == ticker_rc == sec_rc == 0 else 1
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2
 
