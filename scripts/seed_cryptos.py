@@ -97,6 +97,7 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
     store.upsert_provider(PROVIDER, description="FinanceDatabase crypto listings")
     processed = skipped = 0
     unique_ids: set[str] = set()
+    created_entities: set[str] = set()
 
     for idx, row in enumerate(rows, start=1):
         cid = canonical_id_from_row(row)
@@ -113,7 +114,11 @@ def seed_rows(rows: Iterable[dict[str, str]], store: EntityStore, progress_inter
             name=name or None,
             metadata=row_metadata(row),
         )
-        store.upsert_entity(entity)
+        if cid in created_entities:
+            store.upsert_entity(entity, overwrite=True)
+        else:
+            store.upsert_entity(entity)
+            created_entities.add(cid)
         processed += 1
 
         if idx % progress_interval == 0:
