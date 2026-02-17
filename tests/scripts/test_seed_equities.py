@@ -15,6 +15,8 @@ from scripts.seed_equities import (
     RELATION_SECTOR,
     RELATION_INDUSTRY,
     ISIN_PROVIDER,
+    CUSIP_PROVIDER,
+    FIGI_PROVIDER,
 )
 
 
@@ -46,18 +48,24 @@ class EquitiesSeedTests(unittest.TestCase):
 
         cur = self.store.connection.execute("SELECT entity_id, name FROM entities WHERE entity_id LIKE 'sec:%' ORDER BY entity_id;")
         ids = cur.fetchall()
-        self.assertEqual(ids, [("sec:xnas:aapl", "Apple Inc."), ("sec:xnys:msft", "Microsoft Corp")])
+        self.assertEqual(
+            ids,
+            [
+                ("sec:isin:us0378331005", "Apple Inc."),
+                ("sec:isin:us5949181045", "Microsoft Corp"),
+            ],
+        )
 
         cur = self.store.connection.execute(
             "SELECT provider, provider_entity_id, entity_id, metadata FROM provider_entity_map ORDER BY provider_entity_id;"
         )
         maps = cur.fetchall()
         self.assertIn(
-            ("provider:financedatabase", "AAPL", "sec:xnas:aapl", None),
+            ("provider:financedatabase", "AAPL", "sec:isin:us0378331005", None),
             maps,
         )
         self.assertIn(
-            ("provider:financedatabase", "MSFT", "sec:xnys:msft", None),
+            ("provider:financedatabase", "MSFT", "sec:isin:us5949181045", None),
             maps,
         )
         isin_rows = self.store.connection.execute(
@@ -67,8 +75,8 @@ class EquitiesSeedTests(unittest.TestCase):
         self.assertEqual(
             set(isin_rows),
             {
-                ("US0378331005", "company:us:apple-inc"),
-                ("US5949181045", "company:us:microsoft-corp"),
+                ("US0378331005", "sec:isin:us0378331005"),
+                ("US5949181045", "sec:isin:us5949181045"),
             },
         )
         cur = self.store.connection.execute(
@@ -84,8 +92,8 @@ class EquitiesSeedTests(unittest.TestCase):
         self.assertEqual(
             relations,
             [
-                ("company:us:apple-inc", "sec:xnas:aapl", "issued_security"),
-                ("company:us:microsoft-corp", "sec:xnys:msft", "issued_security"),
+                ("company:us:apple-inc", "sec:isin:us0378331005", "issued_security"),
+                ("company:us:microsoft-corp", "sec:isin:us5949181045", "issued_security"),
             ],
         )
 
@@ -109,11 +117,11 @@ class EquitiesSeedTests(unittest.TestCase):
         self.assertTrue(sector_map)
         self.assertTrue(industry_map)
 
-    def test_stores_summary_in_metadata(self) -> None:
-        csv_path = Path(self.tmpdir.name) / "summary.csv"
+    def test_stores_metadata_identifiers(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "metadata.csv"
         csv_path.write_text(
-            "symbol,name,exchange,currency,country,sector,industry,isin,summary\n"
-            "AAPL,Apple Inc.,NMS,USD,United States,Technology,Consumer Electronics,US0378331005,Leading consumer tech brand\n"
+            "symbol,name,exchange,currency,country,sector,industry,isin,cusip,figi,composite_figi,shareclass_figi,summary\n"
+            "AAPL,Apple Inc.,NMS,USD,United States,Technology,Consumer Electronics,US0378331005,037833100,BBG000B9XRY4,BBG000B9XRY4,BBG000B9XRY4,Leading consumer tech brand\n"
         )
 
         rows = load_csv(csv_path)
@@ -122,9 +130,50 @@ class EquitiesSeedTests(unittest.TestCase):
         self.assertEqual(skipped, 0)
 
         metadata = self.store.connection.execute(
-            "SELECT metadata FROM entities WHERE entity_id='sec:xnas:aapl';"
+            "SELECT metadata FROM entities WHERE entity_id='sec:isin:us0378331005';"
         ).fetchone()[0]
-        self.assertEqual(json.loads(metadata), {"summary": "Leading consumer tech brand"})
+        self.assertEqual(
+            json.loads(metadata),
+            {
+                "summary": "Leading consumer tech brand",
+                "isin": "US0378331005",
+                "cusip": "037833100",
+                "figi": "BBG000B9XRY4",
+                "composite_figi": "BBG000B9XRY4",
+                "shareclass_figi": "BBG000B9XRY4",
+            },
+        )
+
+        provider_ids = self.store.connection.execute(
+            "SELECT provider, provider_entity_id FROM provider_entity_map WHERE entity_id='sec:isin:us0378331005';"
+        ).fetchall()
+        self.assertIn((CUSIP_PROVIDER, "037833100"), provider_ids)
+        self.assertIn((FIGI_PROVIDER, "BBG000B9XRY4"), provider_ids)
+
+    def test_rows_without_isin_follow_company_back_to_isin(self) -> None:
+        csv_path = Path(self.tmpdir.name) / "company.csv"
+        csv_path.write_text(
+            "symbol,name,exchange,country,sector,industry,isin\n"
+            "TEST1,Mock Corp,NMS,United States,Technology,Software,US1234567890\n"
+            "SYMBOLX,Mock Corp,NMS,United States,Technology,Software,\n"
+        )
+
+        rows = load_csv(csv_path)
+        inserted, skipped = seed_rows(rows, self.store)
+
+        self.assertEqual(inserted, 1)
+        self.assertEqual(skipped, 0)
+
+        entity_rows = self.store.connection.execute("SELECT entity_id FROM entities WHERE entity_id LIKE 'sec:%';").fetchall()
+        self.assertEqual(entity_rows, [("sec:isin:us1234567890",)])
+
+        provider_rows = self.store.connection.execute(
+            "SELECT provider_entity_id, entity_id FROM provider_entity_map WHERE provider='provider:financedatabase' ORDER BY provider_entity_id;"
+        ).fetchall()
+        self.assertEqual(
+            provider_rows,
+            [("SYMBOLX", "sec:isin:us1234567890"), ("TEST1", "sec:isin:us1234567890")],
+        )
 
     def test_skips_company_when_name_missing(self):
         csv_path = Path(self.tmpdir.name) / "sample_missing_name.csv"
@@ -141,6 +190,51 @@ class EquitiesSeedTests(unittest.TestCase):
             "SELECT entity_id FROM entities WHERE entity_id LIKE 'company:%';"
         )
         self.assertEqual(cur.fetchall(), [])
+
+    def test_creates_fund_entity_for_fund_name(self):
+        csv_path = Path(self.tmpdir.name) / "fund.csv"
+        csv_path.write_text(
+            "symbol,name,exchange,currency,country,sector,industry,isin\n"
+            "BRES,Barwa Real Estate Company Q.P.S.C.,DOH,QAR,Qatar,Real Estate,Real Estate,\n"
+        )
+
+        rows = load_csv(csv_path)
+        inserted, skipped = seed_rows(rows, self.store)
+        self.assertEqual(inserted, 1)
+        self.assertEqual(skipped, 0)
+
+        fund_entities = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_id LIKE 'fund_entity:%';"
+        ).fetchall()
+        self.assertEqual(fund_entities, [("fund_entity:barwa-real-estate-qpsc",)])
+
+        relations = self.store.connection.execute(
+            "SELECT src_entity_id, dst_entity_id FROM entity_entity_map WHERE relation='issued_security';"
+        ).fetchall()
+        self.assertTrue(relations)
+        self.assertEqual(relations[0][0], "fund_entity:barwa-real-estate-qpsc")
+
+    def test_fund_entity_name_dedupes_across_variants(self):
+        csv_path = Path(self.tmpdir.name) / "fund_dupes.csv"
+        csv_path.write_text(
+            "symbol,name,exchange,currency,country,sector,industry,isin\n"
+            "BRES,Barwa Real Estate Company Q.P.S.C.,DOH,QAR,Qatar,Real Estate,Real Estate,\n"
+            "BRES2,Barwa Real Estate co. Q.P.S.C.,DOH,QAR,Qatar,Real Estate,Real Estate,\n"
+        )
+
+        rows = load_csv(csv_path)
+        seed_rows(rows, self.store)
+
+        fund_entities = self.store.connection.execute(
+            "SELECT entity_id FROM entities WHERE entity_id LIKE 'fund_entity:%';"
+        ).fetchall()
+        self.assertEqual(fund_entities, [("fund_entity:barwa-real-estate-qpsc",)])
+
+        relations = self.store.connection.execute(
+            "SELECT src_entity_id, dst_entity_id FROM entity_entity_map WHERE relation='issued_security' ORDER BY dst_entity_id;"
+        ).fetchall()
+        self.assertEqual(relations[0][0], "fund_entity:barwa-real-estate-qpsc")
+        self.assertEqual(relations[1][0], "fund_entity:barwa-real-estate-qpsc")
 
 
 if __name__ == "__main__":

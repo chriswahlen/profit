@@ -104,7 +104,8 @@ def _upsert_region(
             entity_type=EntityType.REGION,
             name=region.name,
             metadata="" if metadata is None else str(metadata),
-        )
+        ),
+        overwrite=True,
     )
     entity_store.map_provider_entity(
         provider=provider,

@@ -16,6 +16,7 @@ import argparse
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -25,9 +26,19 @@ except ImportError:
     pycountry = None
 from config import Config
 from data_sources.entity import Entity, EntityStore, EntityType
-from data_sources.entities import Company, Sector, Industry
+from data_sources.entities import Company, FundEntity, Sector, Industry
+from scripts.name_detector import (
+    CompanyNameDetector,
+    FundNameDetector,
+    NameEquivalence,
+    ProductLabelDetector,
+)
 from scripts.seed_exchanges import EXCHANGES
 
+CUSIP_PROVIDER = "provider:cusip"
+CUSIP_PROVIDER_DESC = "CUSIP registry"
+FIGI_PROVIDER = "provider:figi"
+FIGI_PROVIDER_DESC = "OpenFIGI"
 _COMPANY_METADATA_SOURCE = "financedatabase"
 
 _DEFAULT_EQUITIES_CSV = Path("incoming/datasets/fdb/equities.csv")
@@ -271,20 +282,48 @@ RELATION_SECTOR = "belongs_to_sector"
 RELATION_INDUSTRY = "belongs_to_industry"
 
 
-def canonical_id(symbol: str, exchange: str) -> str | None:
-    exch_clean = (exchange or "").upper()
-    mic = EXCHANGE_TO_MIC.get(exch_clean)
-    if not mic and exch_clean == UNKNOWN_EXCHANGE_CODE:
-        mic = UNKNOWN_EXCHANGE_CODE
-    if not mic:
-        return None
+def _sanitize_ticker(symbol: str | None) -> str | None:
     if not symbol:
         return None
-    # Strip common provider suffixes (.SA, .KS, etc.) from the symbol when building canonical ID.
-    base_symbol = symbol
-    if "." in symbol:
-        base_symbol = symbol.split(".")[0]
-    return f"sec:{mic.lower()}:{base_symbol.lower()}"
+    base_symbol = symbol.split(".", 1)[0].strip().upper()
+    sanitized = re.sub(r"[^A-Z0-9]+", "", base_symbol)
+    return sanitized.lower() or None
+
+
+def _normalize_isin(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = re.sub(r"[^A-Z0-9]+", "", value.strip().upper())
+    if not candidate:
+        return None
+    if len(candidate) != 12:
+        return None
+    if not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{10}", candidate):
+        return None
+    return candidate.lower()
+
+
+def canonical_id(symbol: str, exchange: str, isin: str | None) -> str | None:
+    if isin_normalized := _normalize_isin(isin):
+        return f"sec:isin:{isin_normalized}"
+    if ticker := _sanitize_ticker(symbol):
+        return f"sec:ticker:{ticker}"
+
+
+def _security_for_company(store: EntityStore, company_id: str) -> str | None:
+    cur = store.connection.execute(
+        """
+        SELECT dst_entity_id
+        FROM entity_entity_map
+        WHERE src_entity_id = ? AND relation = ?
+        ORDER BY created_at DESC
+        LIMIT 1;
+        """,
+        (company_id, RELATION_COMPANY_ISSUER),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+    return None
 
 
 def infer_exchange_from_suffix(symbol: str) -> str | None:
@@ -370,8 +409,16 @@ def infer_exchange_from_suffix(symbol: str) -> str | None:
 
 def row_metadata(row: dict) -> str:
     payload: dict[str, str] = {}
-    if summary := (row.get("summary") or "").strip():
-        payload["summary"] = summary
+    for key in (
+        "summary",
+        "isin",
+        "cusip",
+        "figi",
+        "composite_figi",
+        "shareclass_figi",
+    ):
+        if value := (row.get(key) or "").strip():
+            payload[key] = value
     return json.dumps(payload, ensure_ascii=True) if payload else ""
 
 
@@ -383,6 +430,14 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
     store.ensure_relation_type(RELATION_INDUSTRY, description="Security belongs to industry")
     inserted = skipped = 0
     created_companies: set[str] = set()
+    created_fund_entities: set[str] = set()
+    known_names: dict[str, tuple[str, EntityType, str]] = {}
+    created_entities: set[str] = set()
+    listed_relations: set[tuple[str, str]] = set()
+    mapped_symbols: set[str] = set()
+    mapped_provider_ids: set[tuple[str, str]] = set()
+    symbol_to_entity: dict[str, str] = {}
+
     for row in rows:
         symbol = (row.get("symbol") or "").strip().upper()
         provided_name = (row.get("name") or "").strip()
@@ -401,31 +456,107 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         if not name:
             name = symbol  # fallback: use symbol as name when missing
 
-        cid = canonical_id(symbol, exchange)
+        isin = (row.get("isin") or "").strip()
+        if isin.lower() == "not available":
+            isin = ""
+        cusip = (row.get("cusip") or "").strip()
+        figi = (row.get("figi") or "").strip()
+        composite_figi = (row.get("composite_figi") or "").strip()
+        shareclass_figi = (row.get("shareclass_figi") or "").strip()
+
+        mic = EXCHANGE_TO_MIC.get(exchange) or (exchange if exchange == UNKNOWN_EXCHANGE_CODE else None)
+        if not mic:
+            skipped += 1
+            continue
+
+        company_iso = (
+            normalize_country_name(row.get("country"))
+            or EXCHANGE_COUNTRY.get(exchange)
+            or DEFAULT_COMPANY_COUNTRY.lower()
+        )
+        company_id: str | None = None
+        fund_entity_id: str | None = None
+        if provided_name:
+            match = _lookup_entity_by_name(provided_name, known_names)
+            if match:
+                matched_id, matched_type, stored_name = match
+                if matched_type == EntityType.COMPANY:
+                    company_id = matched_id
+                elif matched_type == EntityType.FUND_ENTITY:
+                    fund_entity_id = matched_id
+                _remember_entity_name(provided_name, matched_id, matched_type, known_names)
+            elif FundNameDetector.is_fund_name(provided_name):
+                fund_entity_id = _ensure_fund_entity(
+                    provided_name, store, created_fund_entities
+                )
+                if fund_entity_id:
+                    _remember_entity_name(provided_name, fund_entity_id, EntityType.FUND_ENTITY, known_names)
+            elif CompanyNameDetector.is_company_name(provided_name):
+                company_id = _create_company_entity(
+                    store=store,
+                    name=provided_name,
+                    country_iso=company_iso,
+                    exchange=exchange,
+                    ticker=symbol,
+                    created_companies=created_companies,
+                )
+                if company_id:
+                    _remember_entity_name(provided_name, company_id, EntityType.COMPANY, known_names)
+        elif FundNameDetector.is_fund_name(name):
+            # fallback: name missing, but symbol-level fallback qualifies as fund
+            if fund_entity_id := _ensure_fund_entity(
+                name, store, created_fund_entities
+            ):
+                _remember_entity_name(name, fund_entity_id, EntityType.FUND_ENTITY, known_names)
+
+        cid = None
+        if company_id:
+            if existing := _security_for_company(store, company_id):
+                cid = existing
+        symbol_key = symbol
+        if not cid:
+            cid = symbol_to_entity.get(symbol_key)
+        if not cid:
+            resolved = store.resolve_entity(PROVIDER, symbol)
+            if resolved and not resolved.startswith("mic:"):
+                cid = resolved
+                symbol_to_entity[symbol_key] = cid
+        if not cid:
+            cid = canonical_id(symbol, exchange, isin)
         if not cid:
             skipped += 1
             continue
-        company_id = None
-
         entity = Entity(entity_id=cid, entity_type=EntityType.SECURITY, name=name, metadata=row_metadata(row))
-        store.upsert_entity(entity)
-        meta = None
-        store.map_provider_entity(
-            provider=PROVIDER,
-            provider_entity_id=symbol,
-            entity_id=cid,
-            active_from=None,
-            active_to=None,
-            metadata=meta,
-        )
-        # Link security to its exchange if we have a mapped MIC (and not UNKNOWN).
-        if mic := EXCHANGE_TO_MIC.get(exchange) or (exchange if exchange == UNKNOWN_EXCHANGE_CODE else None):
+        if cid not in created_entities:
+            store.upsert_entity(entity)
+            created_entities.add(cid)
+            inserted += 1
+        else:
+            store.upsert_entity(entity, overwrite=True)
+
+        if symbol not in mapped_symbols:
+            store.map_provider_entity(
+                provider=PROVIDER,
+                provider_entity_id=symbol,
+                entity_id=cid,
+                active_from=None,
+                active_to=None,
+                metadata=None,
+            )
+            mapped_symbols.add(symbol)
+            symbol_to_entity[symbol_key] = cid
+
+        exchange_id = f"mic:{mic.lower()}"
+        relation_key = (cid, exchange_id)
+        if relation_key not in listed_relations:
             logging.debug("Linking security %s to exchange %s", cid, mic)
             store.map_entity_relation(
                 src_entity_id=cid,
-                dst_entity_id=f"mic:{mic.lower()}",
+                dst_entity_id=exchange_id,
                 relation="listed_on",
+                metadata=json.dumps({"symbol": symbol}, ensure_ascii=True),
             )
+            listed_relations.add(relation_key)
 
         sector_val = (row.get("sector") or "").strip()
         if sector_val:
@@ -463,54 +594,135 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
             except ValueError:
                 logging.debug("Skipping industry entity for %s", industry_val)
 
-        company_iso = (
-            normalize_country_name(row.get("country"))
-            or EXCHANGE_COUNTRY.get(exchange)
-            or DEFAULT_COMPANY_COUNTRY.lower()
-        )
-        company_id = None
-        if provided_name:
-            try:
-                company = Company.from_name(provided_name, country_iso2=company_iso)
-                company_id = company.canonical_id
-                if company_id not in created_companies:
-                    metadata = _company_metadata_payload(
-                        country_iso=company_iso,
-                        exchange=exchange,
-                        ticker=symbol,
-                    )
-                    if store.entity_exists(company_id):
-                        logging.info("Company %s already exists, skipping metadata insert", company_id)
-                    else:
-                        company_entity = Entity(
-                            entity_id=company_id,
-                            entity_type=EntityType.COMPANY,
-                            name=name,
-                            metadata=metadata,
-                        )
-                        store.upsert_entity(company_entity)
-                    created_companies.add(company_id)
-                logging.debug("Linking company %s to security %s", company_id, cid)
-                store.map_entity_relation(
-                    src_entity_id=company_id,
-                    dst_entity_id=cid,
-                    relation=RELATION_COMPANY_ISSUER,
-                )
-            except ValueError:
-                logging.debug("Skipping company creation for %s (country iso %s)", symbol, company_iso)
-
-        isin = (row.get("isin") or "").strip()
-        if isin.lower() == "not available":
-            isin = ""
-        if isin and company_id:
-            store.upsert_provider(ISIN_PROVIDER, description=ISIN_PROVIDER_DESC)
-            store.map_provider_entity(
-                provider=ISIN_PROVIDER,
-                provider_entity_id=isin,
-                entity_id=company_id,
+        if company_id:
+            logging.debug("Linking company %s to security %s", company_id, cid)
+            store.map_entity_relation(
+                src_entity_id=company_id,
+                dst_entity_id=cid,
+                relation=RELATION_COMPANY_ISSUER,
             )
-        inserted += 1
+            identifier_mappings: list[tuple[str, str, str]] = []
+            if isin:
+                identifier_mappings.append((ISIN_PROVIDER, ISIN_PROVIDER_DESC, isin))
+            if cusip:
+                identifier_mappings.append((CUSIP_PROVIDER, CUSIP_PROVIDER_DESC, cusip))
+            figi_values = {value for value in (figi, composite_figi, shareclass_figi) if value}
+            for figi_value in figi_values:
+                identifier_mappings.append((FIGI_PROVIDER, FIGI_PROVIDER_DESC, figi_value))
+            for provider, description, value in identifier_mappings:
+                _map_provider_identifier(
+                    store=store,
+                    provider=provider,
+                    description=description,
+                    provider_entity_id=value,
+                    entity_id=cid,
+                    mapped=mapped_provider_ids,
+                )
+        if fund_entity_id:
+            logging.debug("Linking fund entity %s to security %s", fund_entity_id, cid)
+            store.map_entity_relation(
+                src_entity_id=fund_entity_id,
+                dst_entity_id=cid,
+                relation=RELATION_COMPANY_ISSUER,
+            )
     return inserted, skipped
+
+
+def _lookup_entity_by_name(
+    name: str, known_names: dict[str, tuple[str, EntityType, str]]
+) -> tuple[str, EntityType, str] | None:
+    normalized = NameEquivalence.normalize(name)
+    if not normalized:
+        return None
+    return known_names.get(normalized)
+
+
+def _remember_entity_name(
+    name: str,
+    entity_id: str,
+    entity_type: EntityType,
+    known_names: dict[str, tuple[str, EntityType, str]],
+) -> None:
+    normalized = NameEquivalence.normalize(name)
+    if not normalized:
+        return
+    known_names.setdefault(normalized, (entity_id, entity_type, name))
+
+
+def _ensure_fund_entity(
+    name: str, store: EntityStore, created: set[str]
+) -> str | None:
+    normalized = NameEquivalence.normalize(name)
+    if not normalized:
+        return None
+    try:
+        fund_entity = FundEntity.from_name(normalized)
+    except ValueError:
+        return None
+    entity_id = fund_entity.canonical_id
+    if entity_id in created or store.entity_exists(entity_id):
+        created.add(entity_id)
+        return entity_id
+    store.upsert_entity(
+        Entity(entity_id=entity_id, entity_type=EntityType.FUND_ENTITY, name=name)
+    )
+    created.add(entity_id)
+    return entity_id
+
+
+def _create_company_entity(
+    *,
+    store: EntityStore,
+    name: str,
+    country_iso: str,
+    exchange: str,
+    ticker: str,
+    created_companies: set[str],
+) -> str | None:
+    try:
+        company = Company.from_name(name, country_iso2=country_iso)
+    except ValueError:
+        logging.debug("Skipping company creation for %s (country iso %s)", ticker, country_iso)
+        return None
+    company_id = company.canonical_id
+    if company_id in created_companies or store.entity_exists(company_id):
+        created_companies.add(company_id)
+        logging.info("Company %s already exists, skipping metadata insert", company_id)
+        return company_id
+    metadata = _company_metadata_payload(
+        country_iso=country_iso,
+        exchange=exchange,
+        ticker=ticker,
+    )
+    store.upsert_entity(
+        Entity(entity_id=company_id, entity_type=EntityType.COMPANY, name=name, metadata=metadata)
+    )
+    created_companies.add(company_id)
+    return company_id
+
+
+def _map_provider_identifier(
+    *,
+    store: EntityStore,
+    provider: str,
+    description: str,
+    provider_entity_id: str,
+    entity_id: str,
+    mapped: set[tuple[str, str]],
+) -> None:
+    key = (provider, provider_entity_id)
+    if key in mapped:
+        return
+    store.upsert_provider(provider, description=description)
+    store.map_provider_entity(
+        provider=provider,
+        provider_entity_id=provider_entity_id,
+        entity_id=entity_id,
+        active_from=None,
+        active_to=None,
+        metadata=None,
+    )
+    mapped.add(key)
 
 
 def load_csv(path: Path, limit: int | None = None) -> list[dict]:

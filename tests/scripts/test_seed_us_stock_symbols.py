@@ -36,17 +36,17 @@ BAD,,NASDAQ
         conn = store.connection
         cur = conn.execute("SELECT entity_id FROM entities ORDER BY entity_id;")
         ids = [row[0] for row in cur.fetchall()]
-        self.assertEqual(ids, ["sec:xnas:aapl", "sec:xnys:msft"])
+        self.assertEqual(ids, ["sec:ticker:aapl", "sec:ticker:msft"])
 
         cur = conn.execute("SELECT provider, provider_entity_id, entity_id FROM provider_entity_map ORDER BY provider_entity_id;")
         mappings = cur.fetchall()
         self.assertEqual(
             mappings,
             [
-                ("provider:us-stock-symbols", "AAPL", "sec:xnas:aapl"),
-                ("yfinance", "AAPL", "sec:xnas:aapl"),
-                ("provider:us-stock-symbols", "MSFT", "sec:xnys:msft"),
-                ("yfinance", "MSFT", "sec:xnys:msft"),
+                ("provider:us-stock-symbols", "AAPL", "sec:ticker:aapl"),
+                ("yfinance", "AAPL", "sec:ticker:aapl"),
+                ("provider:us-stock-symbols", "MSFT", "sec:ticker:msft"),
+                ("yfinance", "MSFT", "sec:ticker:msft"),
             ],
         )
 

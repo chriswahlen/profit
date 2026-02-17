@@ -27,24 +27,18 @@ from typing import Optional
 from config import Config
 from data_sources.entity import Entity, EntityStore, EntityType
 
-MIC_MAP = {
-    "nasdaq": "xnas",
-    "nasdaqgs": "xnas",
-    "nasdaqcm": "xnas",
-    "nasdaq global select": "xnas",
-    "nasdaq global market": "xnas",
-    "nasdaq capital market": "xnas",
-    "nyse": "xnys",
-    "nysemkt": "xase",
-    "amex": "xase",
-}
+def _sanitize_ticker(symbol: str | None) -> str | None:
+    if not symbol:
+        return None
+    stripped = symbol.split(".", 1)[0].strip().upper()
+    sanitized = "".join(ch for ch in stripped if ch.isalnum())
+    return sanitized.lower() or None
 
 
-def canonical_id(symbol: str, exchange: str) -> str:
-    mic = MIC_MAP.get(exchange.lower())
-    if not mic:
-        raise ValueError(f"Unknown exchange: {exchange}")
-    return f"sec:{mic}:{symbol.lower()}"
+def canonical_id(symbol: str) -> str:
+    if sanitized := _sanitize_ticker(symbol):
+        return f"sec:ticker:{sanitized}"
+    raise ValueError(f"Unable to canonicalize symbol: {symbol}")
 
 
 def seed(csv_path: Path, *, map_yfinance: bool, store: EntityStore) -> None:
@@ -65,7 +59,7 @@ def seed(csv_path: Path, *, map_yfinance: bool, store: EntityStore) -> None:
                 skipped += 1
                 continue
             try:
-                cid = canonical_id(symbol, exch)
+                cid = canonical_id(symbol)
             except ValueError:
                 skipped += 1
                 continue

@@ -34,6 +34,7 @@ class EntityType(str, Enum):
     - ETF:              etf:<slug>                              (etf:spdr-s-p-500-etf-trust)
     - INDEX:            index:provider:code                      (index:spglobal:sp500)
     - FUND:             mic:ticker or isin                       (XNYS:SPY, isin:US78462F1030)
+    - FUND_ENTITY:      fund_entity:<slug>                        (fund_entity:barwa-real-estate-company-qpscs)
     - ECON_SERIES:      econ:provider:series_id                  (econ:fred:CPIAUCSL)
     - PERSON:           person:namespace:slug                    (person:wikidata:Q312)
     - PROPERTY:         property:country:scheme:id               (property:us:apn:123-456-789)
@@ -61,6 +62,7 @@ class EntityType(str, Enum):
     ETF = "etf"
     INDEX = "index"
     FUND = "fund"
+    FUND_ENTITY = "fund_entity"
     ECON_SERIES = "econ_series"
     ECON_EVENT = "econ_event"
     PERSON = "person"

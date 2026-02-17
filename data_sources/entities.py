@@ -59,6 +59,24 @@ class Company:
 
 
 @dataclass(frozen=True)
+class FundEntity:
+    name: str
+
+    @property
+    def canonical_id(self) -> str:
+        if not self.name or not self.name.strip():
+            raise ValueError("Fund entity name is required")
+        slug = _slugify(self.name)
+        return f"fund_entity:{slug}"
+
+    @classmethod
+    def from_name(cls, name: str) -> "FundEntity":
+        if not name or not name.strip():
+            raise ValueError("Fund entity name is required")
+        return cls(name=name)
+
+
+@dataclass(frozen=True)
 class Exchange:
     mic: str
     name: str | None = None
