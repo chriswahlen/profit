@@ -6,6 +6,8 @@ from typing import Dict
 from config import Config
 from data_sources.data_source import DataSource
 from data_sources.entity import EntityStore
+from data_sources.edgar.edgar_data_source import EdgarDataSource
+from data_sources.edgar.edgar_data_store import EdgarDataStore
 from data_sources.redfin.redfin_data_source import RedfinDataSource
 from data_sources.market.market_data_source import MarketDataSource
 from data_sources.market.stooq_provider import StooqProviderAdapter
@@ -19,6 +21,7 @@ class DataSourceManager:
         self._sources: Dict[str, DataSource] = {}
         self.entity_store = EntityStore(self.config)
         self.market_store = MarketDataStore(self.config)
+        self.edgar_store = EdgarDataStore(self.config)
         # Register built-ins.
         self.add(RedfinDataSource(self.config, entity_store=self.entity_store))
         # Stooq daily bars via MarketDataSource wrapper
@@ -37,6 +40,7 @@ class DataSourceManager:
                 store=self.market_store,
             )
         )
+        self.add(EdgarDataSource(self.config, entity_store=self.entity_store, store=self.edgar_store))
 
     # Adds a known data source to this manager.
     def add(self, source: DataSource):

@@ -4,6 +4,7 @@
 Commands:
   seed-regions           Seed canonical regions (countries + states/provinces)
   seed-sec               Seed SEC company tickers/entities
+  seed-edgar             Seed EDGAR submissions for CIKs (from bulk zip)
   seed-equities          Seed FinanceDatabase equities metadata
   seed-cryptos           Seed FinanceDatabase crypto metadata
   seed-exchanges         Seed exchange (market venue) entities
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from config import Config
 
@@ -42,6 +44,14 @@ def _parse_args() -> argparse.Namespace:
         "--local-json",
         help="Optional local path to company_tickers.json (otherwise fetches from SEC)",
     )
+
+    seed_edgar = sub.add_parser("seed-edgar", help="Seed EDGAR submissions for one or more CIKs (bulk zip)")
+    seed_edgar.add_argument(
+        "--submissions-zip",
+        default="incoming/datasets/edgar/submissions.zip",
+        help="Path to submissions.zip bundle (default: incoming/datasets/edgar/submissions.zip)",
+    )
+    seed_edgar.add_argument("ciks", nargs="+", help="One or more CIKs to seed")
 
     sub.add_parser("seed-exchanges", help="Seed exchange (market venue) entities")
     sub.add_parser("seed-currencies", help="Seed ISO 4217 currencies")
@@ -88,6 +98,12 @@ def main() -> int:
         return _cmd_seed_regions(args)
     if args.command == "seed-sec":
         return _cmd_seed_sec(args)
+    if args.command == "seed-edgar":
+        from scripts.seed_edgar import seed_submissions
+
+        cfg = Config()
+        _, failed = seed_submissions(config=cfg, submissions_zip=Path(args.submissions_zip), ciks=list(args.ciks))
+        return 0 if failed == 0 else 1
     if args.command == "seed-equities":
         from scripts.seed_equities import main as fd_main
         fd_args: list[str] = []
