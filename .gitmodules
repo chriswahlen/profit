@@ -1,0 +1,3 @@
+[submodule "libs/agentapi"]
+	path = libs/agentapi
+	url = ssh://git@github.com/chriswahlen/ai_agent.git
