@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from tools.name_equivalence import NameEquivalence
+
 
 class ProductLabelDetector:
     """Utility to detect structured-product/ticker-style names."""
