@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,8 @@ from agents.financial_adviser.job_registry import JOB_TYPE_FINANCIAL_ADVISER, re
 class FinancialAdviserJobRegistryTests(unittest.TestCase):
     def test_enqueue_and_run_job(self) -> None:
         with tempfile.TemporaryDirectory() as td:
+            old = os.environ.get("PROFIT_DATA_PATH")
+            os.environ["PROFIT_DATA_PATH"] = td
             db_path = Path(td) / "agentapi.sqlite"
             queue = JobQueue(db_path=db_path)
             try:
@@ -41,3 +44,7 @@ class FinancialAdviserJobRegistryTests(unittest.TestCase):
                 self.assertIn("answer", ctx["financial_adviser"])
             finally:
                 queue.close()
+                if old is None:
+                    os.environ.pop("PROFIT_DATA_PATH", None)
+                else:
+                    os.environ["PROFIT_DATA_PATH"] = old

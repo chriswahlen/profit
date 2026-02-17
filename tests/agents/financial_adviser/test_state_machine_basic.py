@@ -23,7 +23,21 @@ class FinancialAdviserStateMachineBasicTests(unittest.TestCase):
         expected_answer = "Paying off high-interest debt usually has a strong guaranteed return."
 
         store = MemorySnapshotStore()
-        backend = StubLLM(key_responses={"User question": expected_answer})
+        backend = StubLLM(
+            key_responses={
+                "ROUND: 0": json.dumps(
+                    {
+                        "action": "answer",
+                        "plan": {
+                            "description": "Answer the question using EDGAR data when relevant; otherwise give general guidance.",
+                            "instructions": "Prefer database-backed facts; if no relevant EDGAR data, answer generally and note limitations.",
+                        },
+                        "goal": "Provide a concise answer to the user question.",
+                        "answer": expected_answer,
+                    }
+                ),
+            }
+        )
 
         machine, returned_store = build_financial_adviser_state_machine(
             execution_id=execution_id,
@@ -56,7 +70,11 @@ class FinancialAdviserStateMachineBasicTests(unittest.TestCase):
         self.assertEqual(ctx["financial_adviser"]["answer"], expected_answer)
 
         history = store.load_history(execution_id, after_cursor=0)
-        self.assertEqual(len(history), 1)
-        _cursor, entry = history[0]
-        self.assertEqual(entry.status, "succeeded")
-        self.assertEqual(entry.stage_name, "financial_adviser.qa")
+        # initial_prompt + final_answer
+        self.assertEqual(len(history), 2)
+        _cursor0, entry0 = history[0]
+        _cursor1, entry1 = history[1]
+        self.assertEqual(entry0.status, "succeeded")
+        self.assertEqual(entry0.stage_name, "financial_adviser.initial_prompt")
+        self.assertEqual(entry1.status, "succeeded")
+        self.assertEqual(entry1.stage_name, "financial_adviser.final_answer")

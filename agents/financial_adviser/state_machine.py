@@ -5,19 +5,22 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from agents.financial_adviser.db_query import DbQueryStage, STAGE_DB_QUERY
+from agents.financial_adviser.final_answer import FinalAnswerStage, STAGE_FINAL
+from agents.financial_adviser.initial_prompt import InitialPromptStage, STAGE_INITIAL_PROMPT
 from agentapi.components.snapshot_store import Snapshot, SnapshotStore
 from agentapi.components.memory_snapshot_store import MemorySnapshotStore
-from agentapi.plan import Fork, Plan
-from agentapi.runners import AgentTransformRunner
+from agentapi.plan import Plan
 from agentapi.state_machine import StateMachine
+from config import Config
+from data_sources.edgar.edgar_data_store import EdgarDataStore
 from llm.llm_backend import LLMBackend
 from llm.stub_llm import StubLLM
 
 logger = logging.getLogger(__name__)
 
 PLAN_SCHEMA_VERSION = 1
-STAGE_REGISTRY_VERSION = "financial_adviser:v1"
-STAGE_QA = "financial_adviser.qa"
+STAGE_REGISTRY_VERSION = "financial_adviser:v2"
 
 
 @dataclass(frozen=True)
@@ -25,45 +28,15 @@ class FinancialAdviserPayload:
     question: str
 
     def to_user_context(self) -> dict[str, Any]:
-        return {"financial_adviser": {"question": self.question}}
-
-
-class FinancialAdviserQARunner(AgentTransformRunner):
-    def __init__(self, *, backend: LLMBackend, model: str | None = None) -> None:
-        super().__init__(name=STAGE_QA, backend=backend, model=model)
-
-    def get_prompt(self, *, previous_history_entries: list[Any], user_context: dict[str, Any]) -> str:
-        payload = user_context.get("financial_adviser")
-        question = payload.get("question") if isinstance(payload, dict) else None
-        if not isinstance(question, str) or not question.strip():
-            raise ValueError("user_context.financial_adviser.question is required")
-
-        # Keep this stage intentionally simple for now: one user question -> one answer.
-        # Future stages can add clarifying questions, risk profile, account constraints, etc.
-        return "\n".join(
-            [
-                "You are a financial adviser assistant.",
-                "Provide general educational information only (not personalized financial advice).",
-                "Be concise and include a short safety disclaimer.",
-                "",
-                f"User question: {question.strip()}",
-            ]
-        )
-
-    def process_prompt(
-        self,
-        *,
-        result: str,
-        previous_history_entries: list[Any],
-        user_context: dict[str, Any],
-    ) -> Plan:
-        user_context.setdefault("financial_adviser", {})
-        fa = user_context["financial_adviser"]
-        if not isinstance(fa, dict):
-            raise ValueError("user_context.financial_adviser must be a dict")
-        fa["answer"] = result
-        fa["status"] = "completed"
-        return Fork(children=[])
+        return {
+            "financial_adviser": {
+                "question": self.question,
+                "plan": None,
+                "round": 0,
+                "goal_by_round": {},
+                "db_results": [],
+            }
+        }
 
 
 def _seed_snapshot_if_missing(
@@ -97,20 +70,21 @@ def build_financial_adviser_state_machine(
     snapshot_store: Optional[SnapshotStore] = None,
     llm_backend: Optional[LLMBackend] = None,
     model: str | None = None,
+    edgar_store: EdgarDataStore | None = None,
 ) -> tuple[StateMachine, SnapshotStore]:
     """
     Creates a minimal Financial Adviser state machine:
-    - Single `financial_adviser.qa` stage
-    - Start == Terminal
-    - Uses `user_context.financial_adviser.question` as input
-    - Writes `user_context.financial_adviser.answer` as output
+    - `financial_adviser.initial_prompt` (LLM) decides which SQL to run or answers
+    - `financial_adviser.db_query` executes the SQL against `edgar.sqlite`
+    - `financial_adviser.final_answer` marks completion
     """
 
     store = snapshot_store or MemorySnapshotStore()
     backend = llm_backend or StubLLM(
         key_responses={},
-        default="I can share general education, but I’m not a licensed adviser. Consider diversification and fees.",
+        default='{"action":"answer","plan":{"description":"Provide general educational guidance.","instructions":"Answer concisely and note limitations; ask for database-backed follow-ups when needed."},"goal":"Provide a safe, concise response.","answer":"(stub) I can share general education, but I’m not a licensed adviser. Consider diversification and fees."}',
     )
+    edgar = edgar_store or EdgarDataStore(Config())
 
     _seed_snapshot_if_missing(
         execution_id=execution_id,
@@ -125,11 +99,27 @@ def build_financial_adviser_state_machine(
         stage_registry_version=STAGE_REGISTRY_VERSION,
     )
     machine.register_stage(
-        STAGE_QA,
-        FinancialAdviserQARunner(backend=backend, model=model),
+        STAGE_INITIAL_PROMPT,
+        InitialPromptStage(
+            backend=backend,
+            model=model,
+            db_query_stage_name=STAGE_DB_QUERY,
+            final_stage_name=STAGE_FINAL,
+        ),
         is_start=True,
+    )
+    machine.register_stage(
+        STAGE_DB_QUERY,
+        DbQueryStage(
+            edgar_store=edgar,
+            next_stage_name=STAGE_INITIAL_PROMPT,
+            final_stage_name=STAGE_FINAL,
+        ),
+    )
+    machine.register_stage(
+        STAGE_FINAL,
+        FinalAnswerStage(),
         is_terminal=True,
     )
     machine.finalize()
     return machine, store
-
