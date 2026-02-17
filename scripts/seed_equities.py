@@ -464,6 +464,25 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         composite_figi = (row.get("composite_figi") or "").strip()
         shareclass_figi = (row.get("shareclass_figi") or "").strip()
 
+        identifier_entries: list[tuple[str, str]] = []
+        identifier_mappings: list[tuple[str, str, str]] = []
+        seen_identifiers: set[tuple[str, str]] = set()
+
+        def _add_identifier(provider: str, description: str, value: str | None) -> None:
+            if not value:
+                return
+            key = (provider, value.strip())
+            if not key[1] or key in seen_identifiers:
+                return
+            seen_identifiers.add(key)
+            identifier_entries.append(key)
+            identifier_mappings.append((provider, description, key[1]))
+
+        _add_identifier(ISIN_PROVIDER, ISIN_PROVIDER_DESC, isin)
+        _add_identifier(CUSIP_PROVIDER, CUSIP_PROVIDER_DESC, cusip)
+        for figi_value in {figi, composite_figi, shareclass_figi}:
+            _add_identifier(FIGI_PROVIDER, FIGI_PROVIDER_DESC, figi_value)
+
         mic = EXCHANGE_TO_MIC.get(exchange) or (exchange if exchange == UNKNOWN_EXCHANGE_CODE else None)
         if not mic:
             skipped += 1
@@ -476,32 +495,47 @@ def seed_rows(rows: Iterable[dict], store: EntityStore) -> tuple[int, int]:
         )
         company_id: str | None = None
         fund_entity_id: str | None = None
-        if provided_name:
-            match = _lookup_entity_by_name(provided_name, known_names)
-            if match:
-                matched_id, matched_type, stored_name = match
-                if matched_type == EntityType.COMPANY:
-                    company_id = matched_id
-                elif matched_type == EntityType.FUND_ENTITY:
-                    fund_entity_id = matched_id
-                _remember_entity_name(provided_name, matched_id, matched_type, known_names)
-            elif FundNameDetector.is_fund_name(provided_name):
-                fund_entity_id = _ensure_fund_entity(
-                    provided_name, store, created_fund_entities
-                )
-                if fund_entity_id:
-                    _remember_entity_name(provided_name, fund_entity_id, EntityType.FUND_ENTITY, known_names)
-            elif CompanyNameDetector.is_company_name(provided_name):
-                company_id = _create_company_entity(
-                    store=store,
-                    name=provided_name,
-                    country_iso=company_iso,
-                    exchange=exchange,
-                    ticker=symbol,
-                    created_companies=created_companies,
-                )
-                if company_id:
+        if identifier_entries:
+            if existing := _existing_company_from_identifiers(store, identifier_entries):
+                company_id = existing
+                if provided_name:
                     _remember_entity_name(provided_name, company_id, EntityType.COMPANY, known_names)
+        if provided_name:
+            if not company_id:
+                match = _lookup_entity_by_name(provided_name, known_names)
+                if match:
+                    matched_id, matched_type, stored_name = match
+                    if matched_type == EntityType.COMPANY:
+                        company_id = matched_id
+                    elif matched_type == EntityType.FUND_ENTITY:
+                        fund_entity_id = matched_id
+                    _remember_entity_name(provided_name, matched_id, matched_type, known_names)
+                elif CompanyNameDetector.is_company_name(provided_name):
+                    company_id = _create_company_entity(
+                        store=store,
+                        name=provided_name,
+                        country_iso=company_iso,
+                        exchange=exchange,
+                        ticker=symbol,
+                        created_companies=created_companies,
+                    )
+                    if company_id:
+                        _remember_entity_name(provided_name, company_id, EntityType.COMPANY, known_names)
+                elif FundNameDetector.is_fund_name(provided_name):
+                    fund_entity_id = _ensure_fund_entity(
+                        provided_name, store, created_fund_entities
+                    )
+                    if fund_entity_id:
+                        _remember_entity_name(provided_name, fund_entity_id, EntityType.FUND_ENTITY, known_names)
+            else:
+                if CompanyNameDetector.is_company_name(provided_name):
+                    _remember_entity_name(provided_name, company_id, EntityType.COMPANY, known_names)
+                elif FundNameDetector.is_fund_name(provided_name):
+                    fund_entity_id = _ensure_fund_entity(
+                        provided_name, store, created_fund_entities
+                    )
+                    if fund_entity_id:
+                        _remember_entity_name(provided_name, fund_entity_id, EntityType.FUND_ENTITY, known_names)
         elif FundNameDetector.is_fund_name(name):
             # fallback: name missing, but symbol-level fallback qualifies as fund
             if fund_entity_id := _ensure_fund_entity(
@@ -723,6 +757,33 @@ def _map_provider_identifier(
         metadata=None,
     )
     mapped.add(key)
+
+
+def _existing_company_from_identifiers(
+    store: EntityStore, identifiers: list[tuple[str, str]]
+) -> str | None:
+    for provider, provider_entity_id in identifiers:
+        if not provider_entity_id:
+            continue
+        resolved = store.resolve_entity(provider, provider_entity_id)
+        if not resolved or resolved.startswith("mic:"):
+            continue
+        if company := _company_for_security(store, resolved):
+            return company
+    return None
+
+
+def _company_for_security(store: EntityStore, security_id: str) -> str | None:
+    row = store.connection.execute(
+        """
+        SELECT src_entity_id
+        FROM entity_entity_map
+        WHERE dst_entity_id = ? AND relation = ?
+        LIMIT 1;
+        """,
+        (security_id, RELATION_COMPANY_ISSUER),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def load_csv(path: Path, limit: int | None = None) -> list[dict]:

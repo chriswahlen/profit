@@ -351,12 +351,24 @@ class NameEquivalence:
         "ab",
         "spac",
         "group",
+        "adr",
+        "hold",
+        "holding",
+        "holdings",
+        "et",
+        "expl",
+        "p",
+        "g",
+        "cl",
+        "a",
+        "pg",
     }
 
     @classmethod
     def normalize(cls, value: str | None) -> str | None:
         if value is None:
             return None
+        value = NameEquivalence._split_camel_case(value)
         tokens = [tok for tok in re.split(r"[^\w]+", value.lower()) if tok]
         if not tokens:
             return ""
@@ -368,7 +380,19 @@ class NameEquivalence:
     def names_match(cls, left: str | None, right: str | None) -> bool:
         if left is None or right is None:
             return False
-        return cls.normalize(left) == cls.normalize(right)
+        normalized_left = cls.normalize(left)
+        normalized_right = cls.normalize(right)
+        if normalized_left is None or normalized_right is None:
+            return False
+        if normalized_left == normalized_right:
+            return True
+        if normalized_left + "l" == normalized_right or normalized_right + "l" == normalized_left:
+            return True
+        return False
+
+    @staticmethod
+    def _split_camel_case(value: str) -> str:
+        return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", value)
 
     @staticmethod
     def _collapse_acronyms(tokens: list[str]) -> list[str]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import unittest
 
 from scripts.name_detector import (
@@ -269,32 +270,82 @@ class FundNameDetectorTests(unittest.TestCase):
 
 
 class NameEquivalenceTests(unittest.TestCase):
-    def test_matches_variants(self) -> None:
-        self.assertTrue(
-            NameEquivalence.names_match(
+    _match_groups = [
+        (
+            [
                 "Barwa Real Estate Company Q.P.S.C.",
                 "Barwa Real Estate Company qpsc",
-            ),
-            "should ignore punctuation and case",
-        )
-        self.assertTrue(
-            NameEquivalence.names_match(
                 "Barwa Real Estate co. Q.P.S.C.",
-                "Barwa Real Estate Company qpsc",
-            )
-        )
-        self.assertFalse(
-            NameEquivalence.names_match(
-                "Barwa Real Estate Company",
-                "Different Entity LLC",
-            )
-        )
-        self.assertFalse(
-            NameEquivalence.names_match(
-                "UNIPROF REAL ESTATE HOLDING AGI",
-                "UNIPROF Real Estate Holding AG",
-            )
-        )
+            ],
+            "should ignore punctuation and case while matching the same issuer",
+        ),
+        (
+            [
+                "Alpha Omega Real Estate Fund",
+                "Alpha Omega Real Estate Co. Fund",
+                "Alpha Omega Real Estate Fund Inc.",
+            ],
+            "new entries should also normalize to the same entity",
+        ),
+        (
+            [
+                "Acreage Holdings, Inc.",
+                "AcreageHoldInc",
+                "AcreageHoldings",
+            ],
+            "real life example",
+        ),
+        (
+            [
+                "Adyen N.V.",
+                "Adyen N.V./ADR",
+            ],
+            "real life example",
+        ),
+        (
+            [
+                "Aditya Birla Fashion and Retai",
+                "Aditya Birla Fashion and Retail Limited",
+            ],
+            "real life example",
+        ),
+        (
+            [
+                "AIR LIQUIDE SA",
+                "AIR LIQUIDE-SA ET.EXPL.P.G.CL.A",
+            ],
+            "These refer to the same company, but the second name includes a more detailed legal and share description used in certain European market data systems.",
+        ),
+    ]
+    _mismatch_cases = [
+        (
+            "Barwa Real Estate Company",
+            "Different Entity LLC",
+            "different entities do not match",
+        ),
+        (
+            "UNIPROF REAL ESTATE HOLDING AGI",
+            "UNIPROF Real Estate Holding AG",
+            "adds suffix difference detection",
+        ),
+    ]
+
+    def test_name_equivalence_groups(self) -> None:
+        for names, message in self._match_groups:
+            for left, right in itertools.combinations(names, 2):
+                with self.subTest(left=left, right=right):
+                    self.assertTrue(
+                        NameEquivalence.names_match(left, right),
+                        message,
+                    )
+
+    def test_mismatch_pairs(self) -> None:
+        for left, right, message in self._mismatch_cases:
+            with self.subTest(left=left, right=right):
+                self.assertFalse(
+                    NameEquivalence.names_match(left, right),
+                    message,
+                )
 
 
 if __name__ == "__main__":
