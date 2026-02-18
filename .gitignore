@@ -16,3 +16,4 @@ build/*
 profit/cache/*.so
 tmp.db
 incoming/*
+*.code-workspace
