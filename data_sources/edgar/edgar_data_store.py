@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from xml.etree import ElementTree as ET
 
 from config import Config
@@ -765,3 +765,96 @@ class EdgarDataStore(SqliteDataStore):
 
         self.mark_xbrl_facts_processed(cik_norm, accession, fact_count, f"inserted {fact_count} facts")
         return fact_count
+
+    def accessions_for_cik(self, cik: str) -> list[str]:
+        """
+        Return accession identifiers for the requested normalized CIK, ordered by fetch date descending.
+        """
+        cik_norm = normalize_cik(cik)
+        conn = self._ensure_conn()
+        cur = conn.execute(
+            "SELECT accession FROM edgar_accession WHERE cik = ? ORDER BY fetched_at DESC;",
+            (cik_norm,),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+    def query_xbrl_facts(
+        self,
+        *,
+        cik: str,
+        concept_qnames: Sequence[str],
+        accession: str | None = None,
+        period_type: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch xbrl facts (contexts + values) for the provided concepts and company.
+        """
+        if not concept_qnames:
+            raise ValueError("at least one concept qname is required")
+
+        cik_norm = normalize_cik(cik)
+        accessions = self.accessions_for_cik(cik_norm)
+        if not accessions:
+            return []
+
+        conn = self._ensure_conn()
+        placeholders = ",".join("?" for _ in accessions)
+        sql_parts = [
+            """
+            SELECT
+                f.fact_id,
+                f.accession,
+                c.qname AS concept,
+                c.label,
+                c.data_type,
+                ctx.period_type,
+                ctx.start_date,
+                ctx.end_date,
+                ctx.instant_date,
+                f.value_numeric,
+                f.value_raw,
+                u.measure
+            FROM xbrl_fact f
+            JOIN xbrl_concept c ON c.concept_id = f.concept_id
+            JOIN xbrl_context ctx ON ctx.context_id = f.context_id
+            LEFT JOIN xbrl_unit u ON u.unit_id = f.unit_id
+            WHERE f.accession IN (%s)
+            """
+            % placeholders
+        ]
+        params: list[Any] = list(accessions)
+
+        if accession:
+            sql_parts.append("AND f.accession = ?")
+            params.append(accession)
+
+        concept_placeholders = ",".join("?" for _ in concept_qnames)
+        sql_parts.append(f"AND c.qname IN ({concept_placeholders})")
+        params.extend(concept_qnames)
+
+        if period_type:
+            sql_parts.append("AND ctx.period_type = ?")
+            params.append(period_type)
+
+        date_expr = "COALESCE(ctx.end_date, ctx.instant_date, ctx.start_date)"
+        if start_date:
+            sql_parts.append(f"AND {date_expr} >= ?")
+            params.append(start_date)
+        if end_date:
+            sql_parts.append(f"AND {date_expr} <= ?")
+            params.append(end_date)
+
+        sql_parts.append(f"ORDER BY {date_expr} DESC, f.accession DESC")
+        if limit is not None:
+            sql_parts.append("LIMIT ?")
+            params.append(limit)
+
+        sql = "\n".join(sql_parts)
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        return [dict(zip(columns, row)) for row in rows]
