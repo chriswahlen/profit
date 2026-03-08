@@ -24,14 +24,15 @@ def edgar_environment(tmp_path, monkeypatch):
 def _seed_context_and_fact(store: EdgarDataStore, cik: str, accession: str, concept: str, value: float) -> None:
     store.record_accession_index(cik, accession, "https://example.com/edgar/", [])
     conn = store.connection
+    scheme_id = store.get_or_create_entity_scheme("http://www.sec.gov/CIK")
     cur = conn.execute(
         """
         INSERT INTO xbrl_context (
-            accession, context_ref, entity_scheme, entity_id,
+            accession, context_ref, entity_scheme_id, entity_id,
             period_type, start_date, end_date
         ) VALUES (?, ?, ?, ?, ?, ?, ?);
         """,
-        (accession, "C1", "http://www.sec.gov/CIK", cik, "duration", "2024-01-01", "2024-12-31"),
+        (accession, "C1", scheme_id, cik, "duration", "2024-01-01", "2024-12-31"),
     )
     context_id = cur.lastrowid
     concept_id = store.get_or_create_xbrl_concept(concept, label=concept.split(":")[-1], data_type="monetaryItemType")

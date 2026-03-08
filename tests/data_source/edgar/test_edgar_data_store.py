@@ -130,7 +130,12 @@ class EdgarDataStoreTests(unittest.TestCase):
         self.assertEqual(inserted, 1)
 
         ctx_rows = self.store.connection.execute(
-            "SELECT context_ref, period_type, instant_date, entity_scheme, entity_id FROM xbrl_context WHERE accession = ?",
+            """
+            SELECT ctx.context_ref, ctx.period_type, ctx.instant_date, es.scheme, ctx.entity_id
+            FROM xbrl_context ctx
+            LEFT JOIN entity_scheme es ON es.scheme_id = ctx.entity_scheme_id
+            WHERE ctx.accession = ?
+            """,
             (accession,),
         ).fetchall()
         self.assertEqual(len(ctx_rows), 1)
@@ -149,7 +154,74 @@ class EdgarDataStoreTests(unittest.TestCase):
         self.assertEqual(fact_rows[0][1], "123000")
         self.assertEqual(fact_rows[0][2], 0)
 
+    def test_xbrl_fact_view_exposes_concept_and_unit(self) -> None:
+        cik = "0000123456"
+        accession = "0000123456-00-000004"
+        self.store.record_accession_index(cik, accession, "https://example.com/edgar/", [])
+        xml_bytes = b"""<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:us-gaap="http://fasb.org/us-gaap/2024"
+            xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <xbrli:context id="C2">
+    <xbrli:entity>
+      <xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier>
+    </xbrli:entity>
+    <xbrli:period>
+      <xbrli:instant>2024-12-31</xbrli:instant>
+    </xbrli:period>
+  </xbrli:context>
+  <xbrli:unit id="U2">
+    <xbrli:measure>iso4217:USD</xbrli:measure>
+  </xbrli:unit>
+  <us-gaap:Assets contextRef="C2" unitRef="U2">500000</us-gaap:Assets>
+</xbrli:xbrl>
+"""
+        self.store.ingest_xbrl_facts(cik, accession, xml_bytes)
+        row = self.store.connection.execute(
+            "SELECT concept_qname, concept_label, unit_measure, instant_date FROM xbrl_fact_view WHERE accession = ?",
+            (accession,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertTrue(row[0].endswith("Assets"))
+        self.assertIn(row[1], (None, "Assets"))
+        self.assertTrue(row[2].endswith("USD"))
+
+    def test_ingest_records_precision_sign_and_value_text(self) -> None:
+        cik = "0000123456"
+        accession = "0000123456-00-000005"
+        self.store.record_accession_index(cik, accession, "https://example.com/edgar/", [])
+        xml_bytes = b"""<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:us-gaap="http://fasb.org/us-gaap/2024"
+            xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <xbrli:context id="C3">
+    <xbrli:entity>
+      <xbrli:identifier scheme="http://www.sec.gov/CIK">0000123456</xbrli:identifier>
+    </xbrli:entity>
+      <xbrli:period>
+        <xbrli:startDate>2024-01-01</xbrli:startDate>
+        <xbrli:endDate>2024-12-31</xbrli:endDate>
+      </xbrli:period>
+  </xbrli:context>
+  <xbrli:unit id="U3">
+    <xbrli:measure>iso4217:USD</xbrli:measure>
+  </xbrli:unit>
+  <us-gaap:NetIncomeLoss contextRef="C3" unitRef="U3" precision="0" sign="-1">123456</us-gaap:NetIncomeLoss>
+</xbrli:xbrl>
+"""
+        self.store.ingest_xbrl_facts(cik, accession, xml_bytes)
+        row = self.store.connection.execute(
+            "SELECT precision, sign, value_text, footnote_html FROM xbrl_fact_view WHERE accession = ?",
+            (accession,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], 0)
+        self.assertEqual(row[1], -1)
+        self.assertEqual(row[2], "123456")
+        self.assertIsNone(row[3])
+
 
 if __name__ == "__main__":
     unittest.main()
-

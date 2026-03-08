@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+# ... existing imports ...
 from dataclasses import dataclass
 from typing import Optional
 from xml.etree import ElementTree as ET
@@ -23,12 +24,64 @@ class ParsedFact:
     attrs: dict[str, str]
     lexical_value: str
     is_nil: int
+    precision: int | None
+    sign: int | None
+    value_text: str
+    footnote_html: str | None
 
 
 @dataclass(frozen=True)
 class ParsedXbrl:
     facts: list[ParsedFact]
     unparsed: list[dict[str, str]]
+
+
+def _attr_value(attrs: dict[str, str], name: str) -> str | None:
+    target = name.lower()
+    for key, value in attrs.items():
+        candidate = key.split("}")[-1].lower()
+        if candidate == target:
+            return value
+    return None
+
+
+def _parse_int_attr(attrs: dict[str, str], name: str) -> int | None:
+    raw = _attr_value(attrs, name)
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if stripped.lstrip("+-").isdigit():
+        return int(stripped)
+    return None
+
+
+def _parse_sign(attrs: dict[str, str], text_raw: str) -> int | None:
+    raw = _attr_value(attrs, "sign")
+    if raw:
+        stripped = raw.strip()
+        if stripped.lstrip("+-").isdigit():
+            return int(stripped)
+        lowered = stripped.lower()
+        if lowered.startswith("neg"):
+            return -1
+        if lowered.startswith("pos"):
+            return 1
+    if text_raw.startswith("-"):
+        return -1
+    if text_raw.startswith("+"):
+        return 1
+    return None
+
+
+def _extract_footnote_html(elem: ET.Element) -> str | None:
+    footnotes: list[str] = []
+    for descendant in elem.findall(".//*"):
+        tag = descendant.tag.split("}")[-1].lower()
+        if tag == "footnote":
+            footnotes.append(ET.tostring(descendant, encoding="unicode", method="xml").strip())
+    return "\n".join(footnotes) if footnotes else None
 
 
 def _parse_float(text: str | None) -> Optional[float]:
@@ -94,6 +147,10 @@ def parse_xbrl(xml_bytes: bytes, *, root: ET.Element | None = None) -> ParsedXbr
                     attrs=attrs,
                     lexical_value=lexical_value,
                     is_nil=is_nil,
+                    precision=_parse_int_attr(attrs, "precision"),
+                    sign=_parse_sign(attrs, text_raw),
+                    value_text=lexical_value,
+                    footnote_html=_extract_footnote_html(elem),
                 )
             )
         else:
@@ -101,4 +158,3 @@ def parse_xbrl(xml_bytes: bytes, *, root: ET.Element | None = None) -> ParsedXbr
                 unparsed.append({"tag": tag, "text": text_raw, "attrs": json.dumps(attrs, ensure_ascii=True)})
 
     return ParsedXbrl(facts=facts, unparsed=unparsed)
-

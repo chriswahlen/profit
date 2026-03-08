@@ -29,6 +29,11 @@ def _parse_args() -> argparse.Namespace:
         default=0.0,
         help="Optional pause between requests (seconds). Default: 0.0",
     )
+    edgar.add_argument(
+        "--process-filings",
+        action="store_true",
+        help="Also download each filing's XML/TXT and ingest EDGAR XBRL facts.",
+    )
 
     return parser.parse_args()
 
@@ -45,6 +50,8 @@ def main() -> int:
         if args.pause_s:
             argv += ["--pause-s", str(args.pause_s)]
         argv += list(args.ciks)
+        if args.process_filings:
+            argv.append("--process-filings")
         return fetch_edgar_main(argv)
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
@@ -53,4 +60,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -7,11 +7,11 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Generic, Iterable, List, Optional, Sequence, Tuple, Type, TypeVar
 
-from profit.cache import CacheMissError, FileCache, OfflineModeError
-from profit.sources.coverage import CoverageAdapter
-from profit.sources.errors import ThrottledError, InactiveInstrumentError
-from profit.sources.types import Fingerprintable, LifecycleReader
-from profit.config import ProfitConfig
+from network.cache import CacheMissError, FileCache, OfflineModeError
+from network.sources.coverage import CoverageAdapter
+from network.sources.errors import ThrottledError, InactiveInstrumentError
+from network.sources.types import Fingerprintable, LifecycleReader
+from network.config import ProfitConfig
 
 RequestT = TypeVar("RequestT", bound=Fingerprintable)
 ResultT = TypeVar("ResultT")

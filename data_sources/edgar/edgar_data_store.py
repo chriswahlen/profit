@@ -44,7 +44,6 @@ class EdgarDataStore(SqliteDataStore):
         context_id: int
         accession: str
         context_ref: str
-        entity_scheme: str | None
         entity_scheme_id: int | None
         entity_id: str | None
         period_type: str
@@ -152,7 +151,6 @@ class EdgarDataStore(SqliteDataStore):
                 context_id INTEGER PRIMARY KEY,
                 accession TEXT NOT NULL,
                 context_ref TEXT NOT NULL,
-                entity_scheme TEXT,
                 entity_id TEXT,
                 period_type TEXT NOT NULL CHECK (period_type IN ('instant','duration')),
                 start_date TEXT,
@@ -160,6 +158,7 @@ class EdgarDataStore(SqliteDataStore):
                 instant_date TEXT,
                 entity_scheme_id INTEGER,
                 FOREIGN KEY(accession) REFERENCES edgar_accession(accession),
+                FOREIGN KEY(entity_scheme_id) REFERENCES entity_scheme(scheme_id),
                 UNIQUE (accession, context_ref)
             );
 
@@ -254,12 +253,73 @@ class EdgarDataStore(SqliteDataStore):
     def _ensure_xbrl_context_columns(conn: sqlite3.Connection) -> None:
         cur = conn.execute("PRAGMA table_info(xbrl_context)")
         columns = {row[1] for row in cur.fetchall()}
-        # `edgar.sqlite` schema includes these. If a DB predates them, add in-place.
-        if "entity_scheme" not in columns:
-            conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_scheme TEXT")
+        # If the old schema stored the scheme string, rebuild the table without that column.
+        if "entity_scheme" in columns:
+            EdgarDataStore._migrate_xbrl_context_remove_entity_scheme(conn, columns)
+            cur = conn.execute("PRAGMA table_info(xbrl_context)")
+            columns = {row[1] for row in cur.fetchall()}
         if "entity_scheme_id" not in columns:
             conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_scheme_id INTEGER")
+        conn.commit()
 
+    @staticmethod
+    def _migrate_xbrl_context_remove_entity_scheme(conn: sqlite3.Connection, existing_columns: set[str]) -> None:
+        logger.info("Migrating xbrl_context schema to drop entity_scheme column")
+        has_scheme_id = "entity_scheme_id" in existing_columns
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("ALTER TABLE xbrl_context RENAME TO xbrl_context_old")
+        conn.execute(
+            """
+            CREATE TABLE xbrl_context (
+                context_id INTEGER PRIMARY KEY,
+                accession TEXT NOT NULL,
+                context_ref TEXT NOT NULL,
+                entity_id TEXT,
+                period_type TEXT NOT NULL CHECK (period_type IN ('instant','duration')),
+                start_date TEXT,
+                end_date TEXT,
+                instant_date TEXT,
+                entity_scheme_id INTEGER,
+                FOREIGN KEY(accession) REFERENCES edgar_accession(accession),
+                FOREIGN KEY(entity_scheme_id) REFERENCES entity_scheme(scheme_id),
+                UNIQUE (accession, context_ref)
+            );
+            """
+        )
+        scheme_expr = "entity_scheme_id" if has_scheme_id else "NULL"
+        conn.execute(
+            f"""
+            INSERT INTO xbrl_context (
+                context_id,
+                accession,
+                context_ref,
+                entity_id,
+                period_type,
+                start_date,
+                end_date,
+                instant_date,
+                entity_scheme_id
+            )
+            SELECT
+                context_id,
+                accession,
+                context_ref,
+                entity_id,
+                period_type,
+                start_date,
+                end_date,
+                instant_date,
+                {scheme_expr}
+            FROM xbrl_context_old;
+            """
+        )
+        conn.execute("DROP TABLE xbrl_context_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_context_accession ON xbrl_context(accession)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_context_period ON xbrl_context(accession, period_type, start_date, end_date, instant_date)"
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
     def _create_fact_view(self, conn: sqlite3.Connection) -> None:
         conn.execute("DROP VIEW IF EXISTS xbrl_fact_view;")
         conn.execute(
@@ -533,7 +593,6 @@ class EdgarDataStore(SqliteDataStore):
         accession: str,
         context_ref: str,
         *,
-        entity_scheme: str | None,
         entity_scheme_id: int | None,
         entity_id: str | None,
         period_type: str,
@@ -547,17 +606,15 @@ class EdgarDataStore(SqliteDataStore):
             INSERT INTO xbrl_context (
                 accession,
                 context_ref,
-                entity_scheme,
                 entity_id,
                 period_type,
                 start_date,
                 end_date,
                 instant_date,
                 entity_scheme_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(accession, context_ref) DO UPDATE SET
-                entity_scheme=excluded.entity_scheme,
                 entity_id=excluded.entity_id,
                 period_type=excluded.period_type,
                 start_date=excluded.start_date,
@@ -568,7 +625,6 @@ class EdgarDataStore(SqliteDataStore):
             (
                 accession,
                 context_ref,
-                entity_scheme,
                 entity_id,
                 period_type,
                 start_date,
@@ -751,7 +807,6 @@ class EdgarDataStore(SqliteDataStore):
             context_id = self.upsert_xbrl_context(
                 accession,
                 ctx.id,
-                entity_scheme=ctx.entity_scheme,
                 entity_scheme_id=scheme_id,
                 entity_id=ctx.entity_id,
                 period_type=ctx.period_type,
@@ -786,13 +841,13 @@ class EdgarDataStore(SqliteDataStore):
                 context_id,
                 unit_id=unit_id,
                 decimals=decimals,
-                precision=None,
-                sign=None,
+                precision=fact.precision,
+                sign=fact.sign,
                 value_numeric=fact.value,
-                value_text=None,
+                value_text=fact.value_text,
                 value_raw=raw_value,
                 is_nil=fact.is_nil,
-                footnote_html=None,
+                footnote_html=fact.footnote_html,
             )
             fact_count += 1
 
