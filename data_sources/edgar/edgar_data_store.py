@@ -240,6 +240,7 @@ class EdgarDataStore(SqliteDataStore):
         conn.commit()
         self._ensure_accession_file_url_column(conn)
         self._ensure_xbrl_context_columns(conn)
+        self._create_fact_view(conn)
 
     @staticmethod
     def _ensure_accession_file_url_column(conn: sqlite3.Connection) -> None:
@@ -258,8 +259,40 @@ class EdgarDataStore(SqliteDataStore):
             conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_scheme TEXT")
         if "entity_scheme_id" not in columns:
             conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_scheme_id INTEGER")
-        if "entity_id" not in columns:
-            conn.execute("ALTER TABLE xbrl_context ADD COLUMN entity_id TEXT")
+
+    def _create_fact_view(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP VIEW IF EXISTS xbrl_fact_view;")
+        conn.execute(
+            """
+            CREATE VIEW xbrl_fact_view AS
+            SELECT
+                f.fact_id,
+                f.accession,
+                f.context_id,
+                c.qname AS concept_qname,
+                c.label AS concept_label,
+                c.data_type AS concept_data_type,
+                ctx.context_ref,
+                ctx.period_type,
+                ctx.start_date,
+                ctx.end_date,
+                ctx.instant_date,
+                f.unit_id,
+                u.measure AS unit_measure,
+                f.decimals,
+                f.precision,
+                f.sign,
+                f.value_numeric,
+                f.value_text,
+                f.value_raw,
+                f.is_nil,
+                f.footnote_html
+            FROM xbrl_fact f
+            JOIN xbrl_concept c ON c.concept_id = f.concept_id
+            LEFT JOIN xbrl_context ctx ON ctx.context_id = f.context_id
+            LEFT JOIN xbrl_unit u ON u.unit_id = f.unit_id;
+            """
+        )
         conn.commit()
 
     # --- submissions --------------------------------------------------------
