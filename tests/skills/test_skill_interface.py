@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agents.financial_advisor.skills.skill_interface import (
     SkillDescriptor,
+    SkillExecutionResult,
     SkillInterface,
     SkillUsagePrompt,
 )
@@ -40,6 +43,11 @@ class DummySkillInterface(SkillInterface):
         except KeyError as exc:
             raise ValueError(f"Unknown skill_id {skill_id}") from exc
 
+    def execute_skill(self, skill_id: str, payload: dict[str, Any]) -> SkillExecutionResult:
+        if skill_id not in {self._skills[0].skill_id}:
+            raise ValueError("Unknown skill_id")
+        return SkillExecutionResult(skill_id=skill_id, records=[], metadata={"payload": payload})
+
 
 def test_list_skills_returns_available_descriptors():
     skill_interface = DummySkillInterface()
@@ -61,3 +69,17 @@ def test_describe_skill_usage_unknown_skill_raises():
     skill_interface = DummySkillInterface()
     with pytest.raises(ValueError):
         skill_interface.describe_skill_usage("skill:unknown:foo")
+
+
+def test_execute_skill_returns_metadata():
+    skill_interface = DummySkillInterface()
+    payload = {"question": "foo"}
+    result = skill_interface.execute_skill("skill:edgar:filings", payload)
+    assert isinstance(result, SkillExecutionResult)
+    assert result.metadata["payload"] == payload
+
+
+def test_execute_skill_unknown_skill_raises():
+    skill_interface = DummySkillInterface()
+    with pytest.raises(ValueError):
+        skill_interface.execute_skill("skill:unknown", {})

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from data_sources.data_store import DataSourceUpdateResults
 from data_sources.sqlite_data_store import SqliteDataStore
@@ -227,6 +227,33 @@ class MarketDataStore(SqliteDataStore):
         )
         row = cur.fetchone()
         return row[0] if row else None
+
+    def query_candles_best(
+        self,
+        canonical_id: str,
+        *,
+        start_ts: str | None = None,
+        end_ts: str | None = None,
+    ) -> list[dict[str, Any]]:
+        cur = self._ensure_conn().cursor()
+        sql = """
+            SELECT canonical_id, start_ts, provider, open, high, low, close, adj_close, dividend, volume
+            FROM candles_best
+            WHERE canonical_id=?
+        """
+        params: list[str] = [canonical_id]
+        if start_ts:
+            sql += " AND start_ts >= ?"
+            params.append(start_ts)
+        if end_ts:
+            sql += " AND start_ts <= ?"
+            params.append(end_ts)
+        sql += " ORDER BY start_ts DESC;"
+
+        cur.execute(sql, params)
+        column_names = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        return [dict(zip(column_names, row)) for row in rows]
 
     # --- ingestion runs ------------------------------------------------------
     def start_ingestion_run(self, *, provider: str, source: str | None = None) -> str:
