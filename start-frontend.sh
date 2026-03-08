@@ -14,7 +14,7 @@ if [[ -z "${DB_PATH}" ]]; then
 fi
 REGISTRY_MODULE="${AGENTAPI_JOB_REGISTRY:-agents.financial_adviser.job_registry}"
 HOST="${AGENTAPI_FRONTEND_HOST:-127.0.0.1}"
-PORT="${AGENTAPI_FRONTEND_PORT:-8080}"
+PORT="${AGENTAPI_FRONTEND_PORT:-8070}"
 DEFAULT_JOB_TYPE="${AGENTAPI_DEFAULT_JOB_TYPE:-financial_adviser}"
 
 python3 -m service.frontend.server \
